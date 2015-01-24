@@ -1,0 +1,603 @@
+
+
+// ------hoc_main--->>/Volumes/d1/Users/ximing/Projects/ParSims/Runs_pDE/thin-1stspike/main-n400-Vbtim-simL-v8d-reduced.hoc<<---------------
+
+
+// ------hoc_main--->>/Volumes/d1/Users/ximing/Projects/ParSims/Runs_pDE/thin-1stspike/main-n400-Vbtim-simL-v8d-reduced.hoc<<---------------
+// Initialize
+{ 
+  //  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  chdir("/home/neuro/from_axon/")
+  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  load_file( "stdrun.hoc" )
+  load_file( "eMorph-p.hoc" )
+  load_file( "do_log.hoc" )
+  load_file( "test_mat.hoc")
+  load_file("hoc51_deriv.hoc")
+  chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE")
+}
+objref RunEnv
+{ 
+  RunEnv = new str_obj()
+  RunEnv.nsystem( "echo $cNeuro", RunEnv.s1 )	// get value of cNeuro environment var into RunEnv.s1
+  RunEnv.nsystem( "arch", RunEnv.s2 )		// get arch of machine we're running on on RunEnv.s2
+  if( ! strcmp( RunEnv.s2, "ppc" ) ) {		// NMOD_dll filename appropriate to our architecture on RunEnv.s3
+    sprint( RunEnv.s3, "%s/lib/nrn/NMOD/ca1n1-mod/powerpc/.libs/libnrnmech.so", RunEnv.s1 )
+  } else {
+    if( ! strcmp( RunEnv.s2, "i686" ) || ! strcmp( RunEnv.s2, "i386" ) ) {
+      sprint( RunEnv.s3, "/Volumes/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/i686/.libs/libnrnmech.so", RunEnv.s1 )
+      print RunEnv.s3	
+    } else {
+      if( ! strcmp( RunEnv.s2, "x86_64" ) ) {
+	//sprint( RunEnv.s3, "%s/lib/nrn/NMOD/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1 )
+	sprint( RunEnv.s3, "/home/neuro/from_axon/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1 )
+        print RunEnv.s3
+	} else {
+        printf( "\n\n\tUnknown architecture >>%s<<\n\n", RunEnv.s2 )
+      }
+    }
+  }
+  nrn_load_dll( RunEnv.s3 )
+}
+
+//================================================================================
+func vdef(){
+  if( name_declared( $s1 ) == 5 ) return 1
+  return 0
+}
+//================================================================================
+func Boltz(){
+  return 1/(1+exp(($1-$2)/$3))
+}
+
+func max(){ local i, im
+  im = $1
+  for i=1, numarg() if( $i>im ) im = $i
+  return im
+}
+
+func GaussLike(){ // x, A, W, D
+  return $2*exp(-($1-$4)^2/$3 )
+}
+
+// Perpendicular y distance
+func ydistP(){
+  //if(ismembrane("morpho")) {
+    // return abs(0.5*(y0_morpho+y1_morpho))
+  //}else {
+     //return abs( y3d(0)+y3d(n3d()-1) )/2
+  //}
+ return distance(0.5)
+}
+
+//================================================================================
+objref eM
+eM = new eMorph()
+eM.idebug = 1
+dfc_idebug = 0
+
+proc mulfit_cell_init() { 
+  soma { distance() }	// set soma(0.5) as reference point
+  //adj_e_pas = G_e_pas - G_e_pas_slope * tgt_bldiff
+  //printf( "adj_e_pas %g G_e_pas %g G_e_pas_slope %g tgt_bldiff %g\n", adj_e_pas, G_e_pas, G_e_pas_slope, tgt_bldiff )
+  forall {
+    do_pas()
+    do_Naf()      // does Naf and Nav16
+    do_h()
+    do_KDR()
+    do_KA()
+    //do_KDM()
+    do_KS1()
+    do_KS2()
+  }
+  
+   
+  Spnum = 30000
+  if( vdef( "Spine_number"))  Spnum = Spine_number
+  eM.Spine_Comp_RmCm_f3d( "n400_af3d", Spnum )	// We perform Spine compensation after all else is set.
+  //eM.use_morpho_xyz=1
+  //eM.Spine_Comp_RmCm_n400_JAI(Spnum)
+
+  eM.idebug = 0						// show debug info only on first run
+  set_nseg( lambda_f_d )
+  //ifsec "axon_hill" {
+  //	axon_hill {
+  //		diam(0:1)=soma.diam(1):1
+  //	}
+  //}
+}
+
+//--------------------------------------------------------------------------------
+proc set_nseg(){ local ns, lfd 
+  nseg_tot = 0
+  lfd = $1
+  soma area( 0.5 )
+  forall { 
+    if( lfd <= 0 ) ns = 1
+    if( lfd >  0 ) ns = int((L/($1 *lambda_f(100))+.9)/2)*2 + 1 
+    if( ns > nseg ) nseg = ns
+    nseg_tot += nseg
+  }
+  printf( "lambda-d %g nseg_tot %d\n", lfd, nseg_tot )
+}
+
+//--------------------------------------------------------------------------------
+proc do_pas() {
+  if( !ismembrane("epas") ) insert epasn
+  //e_pas	= adj_e_pas
+  g_epasn	= 1 / ( G_Rm * 1000 )
+  Ra	= G_Ra
+  cm	= G_cm
+  
+  ifsec "soma" {
+    if( vdef( "soma_l")) L=soma_l
+    if( vdef( "soma_diam")) diam=soma_diam
+    if( vdef( "soma_cm" )) cm	= soma_cm
+    if( vdef( "soma_Rm" )) g_epasn	= 1/ ( soma_Rm * 1000 )
+    if( vdef( "soma_Ra" )) Ra	= soma_Ra
+  }
+  ifsec "axon" {		// aX_ => generic for all axons but Hillock
+    if( vdef( "aX_cm" )) cm	= aX_cm
+    if( vdef( "aX_Rm" )) g_epasn	= 1/ ( aX_Rm * 1000 )
+    if( vdef( "aX_Ra" )) Ra	= aX_Ra
+  }
+  ifsec "axon_mnode" {		// aXm_ special for myelin can override generic
+    if( vdef("aXm_cm"))	cm	= aXm_cm
+    if( vdef("aXm_Rm"))	g_epasn	= 1/ ( aXm_Rm * 1000 )
+    if( vdef("aXm_Ra"))	Ra	= aXm_Ra
+  }
+  ifsec "axon_inode" {		// aXr_ special for nodes of Ranvier can override generic
+    if( vdef("aXr_cm"))	cm	= aXr_cm
+    if( vdef("aXr_Rm"))	g_epasn	= 1/ ( aXr_Rm * 1000 )
+    if( vdef("aXr_Ra"))	Ra	= aXr_Ra
+  }
+
+  ifsec "axon_iseg[0]" {
+    //if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
+	L=30
+	diam=1
+  }
+  ifsec "axon_iseg[1]" {
+    //if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
+ 	L=40
+	diam=1
+  }
+  ifsec "axon_hill" {
+    if(vdef("axon_hill_l")) {
+	L=axon_hill_l
+    }else{L=5}
+    diam(0:1)=2.8:1
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_Naf(){ 
+  if( vdef( "Gbar_Naf" )){
+    if( !ismembrane("Naf_i0")) insert Naf_i0
+ 
+    nai0_na_ion = 10
+    nao0_na_ion = 145
+    nai=nai0_na_ion
+    nao=nao0_na_ion
+    ena=nernst(nai0_na_ion, nao0_na_ion, 1)
+
+    gbar_Naf_i0 = Gbar_Naf	// default value unless overriden below
+
+    ifsec "soma" 	if(vdef("s0_Gbar_Naf"))			gbar_Naf_i0 	= s0_Gbar_Naf
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_Naf"))		gbar_Naf_i0 	= aXh_Gbar_Naf
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_Naf"))	          	gbar_Naf_i0 	= aXm_Gbar_Naf
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon_iseg" {
+	//if(!ismembrane("Naf_i1")){
+		insert Naf_i1
+		uninsert Naf_i0
+	//}		
+	ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_Naf" )) 	gbar_Naf_i1 	= aXi0_Gbar_Naf
+	ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_Naf" )) 	gbar_Naf_i1 	= aXi1_Gbar_Naf
+	}
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_Naf" )) 	gbar_Naf_i0 	= aXr_Gbar_Naf
+   }
+ }
+
+
+
+//--------------------------------------------------------------------------------
+
+proc do_KDR(){ local i
+  if( vdef( "Gbar_KDR" )){
+    if( !ismembrane("KDR_i1") ) insert KDR_i1
+
+    ki0_k_ion=140
+    ko0_k_ion=2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek=nernst(ki0_k_ion, ko0_k_ion, 1)
+
+    gbar_KDR_i1 = Gbar_KDR
+    if(vdef("Gbar_KDR_dslope") && !issection("axon.*")) 	gbar_KDR_i1 = Gbar_KDR *(1+Gbar_KDR_dslope*ydistP())
+
+    ifsec "soma" 	if(vdef("s0_Gbar_KDR"))			gbar_KDR_i1 	= s0_Gbar_KDR
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDR"))		gbar_KDR_i1 	= aXh_Gbar_KDR
+
+    ifsec "axon" if( vdef("aX_Gbar_KDR"))			gbar_KDR_i1	= aX_Gbar_KDR
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KDR" )) 				gbar_KDR_i1 	= aXi_Gbar_KDR
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDR" )) 	gbar_KDR_i1 	= aXi0_Gbar_KDR
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDR" )) 	gbar_KDR_i1 	= aXi1_Gbar_KDR
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KDR" )) 	gbar_KDR_i1 	= aXr_Gbar_KDR
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KDR" )) 	gbar_KDR_i1 	= aXm_Gbar_KDR
+  }
+}
+
+
+//--------------------------------------------------------------------------------
+proc do_KA(){ local i
+  if( vdef( "Gbar_KA" )){
+    if( !ismembrane("KA_i1") ) insert KA_i1
+    
+    ki0_k_ion = 140
+    ko0_k_ion = 2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek=nernst(ki0_k_ion, ko0_k_ion, 1)
+
+    gbar_KA_i1 = Gbar_KA
+    
+    soma {
+	  if(vdef("s0_Gbar_KA"))				gbar_KA_i1=s0_Gbar_KA
+    }
+    
+    if(vdef("Gbar_KA_dslope") && !issection("axon.*")) 		gbar_KA_i1 = Gbar_KA *(1+Gbar_KA_dslope*ydistP() )
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KA"))			gbar_KA_i1 	= s0_Gbar_KA
+
+    ifsec "axon_iseg" {	
+      ifsec "axon_iseg[0]" 	if( vdef( "s0_Gbar_KA" )) 	gbar_KA_i1 	= s0_Gbar_KA
+      ifsec "axon_iseg[1]" 	if( vdef( "s0_Gbar_KA" )) 	gbar_KA_i1 	= s0_Gbar_KA
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KA" )) 	gbar_KA_i1 	= 0//aXr_Gbar_KA
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KA" )) 	gbar_KA_i1 	= 0//aXm_Gbar_KA
+  }
+}
+
+
+//--------------------------------------------------------------------------------
+proc do_KDM(){
+	ifsec "soma"		if(vdef("Gbar_KDM")){
+		insert KDM_i1
+		gbar_KDM_i1 = Gbar_KDM
+	}
+	ifsec "axon_hill"	if(vdef("Gbar_KDM")){
+		insert KDM_i1
+		gbar_KDM_i1 = Gbar_KDM
+	}
+	ifsec "axon_iseg"	if(vdef("Gbar_KDM")){
+		insert KDM_i1
+		gbar_KDM_i1 = Gbar_KDM
+	}
+}
+
+//---------------------------------------------------------
+proc do_KS1(){
+
+    ki0_k_ion = 140
+    ko0_k_ion = 2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek=nernst(ki0_k_ion, ko0_k_ion, 1)
+
+	ifsec "soma"		if(vdef("Gbar_KS1")){
+		insert KS1
+		gbar_KS1 = Gbar_KS1
+	}
+	ifsec "axon_hill"	if(vdef("Gbar_KS1")){
+		insert KS1
+		gbar_KS1 = Gbar_KS1
+	}
+	ifsec "axon_iseg"	if(vdef("Gbar_KS1")){
+		insert KS1
+		gbar_KS1 = Gbar_KS1
+	}
+}
+
+//------------------------------------------------------
+
+proc do_KS2(){
+
+    ki0_k_ion = 140
+    ko0_k_ion = 2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek=nernst(ki0_k_ion, ko0_k_ion, 1)
+
+	ifsec "soma"		if(vdef("Gbar_KS2")){
+		insert KS2
+		gbar_KS2 = Gbar_KS2
+	}
+	ifsec "axon_hill"	if(vdef("Gbar_KS2")){
+		insert KS2
+		gbar_KS2 = Gbar_KS2
+	}
+	ifsec "axon_iseg"	if(vdef("Gbar_KS2")){
+		insert KS2
+		gbar_KS2 = Gbar_KS2
+	}
+}
+
+//----------------------------------------------------------------------------------
+proc do_h(){ local i
+  if( vdef( "Gbar_h" )){
+    if( !ismembrane("h_i0") ) insert h_i0
+    eh_i0 = G_eh
+    gbar_h_i0 = Gbar_h
+    if(vdef("Gbar_h_dslope") && !issection("axon.*")) 	gbar_h_i0 = Gbar_h *(1+Gbar_h_dslope*ydistP() )
+    //ifsec "dend" {
+    //	ydistp=abs(0.5*(y0_morpho+y1_morpho))
+    //	gbar_h_i0=Gbar_h*(1+Gbar_h_dslope*ydistp)
+    // }
+    //ifsec "axon_hill" 	if(vdef("aXh_Gbar_h"))			gbar_h_i0 	= aXh_Gbar_h
+    //ifsec "axon_mnode" if(vdef("aXm_Gbar_h"))			gbar_h_i0 	= aXm_Gbar_h
+    //if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    //ifsec "axon" if( vdef("aX_Gbar_h"))				gbar_h_i0	= aX_Gbar_h
+    //ifsec "axon_iseg" {	
+      //if( vdef( "aXi_Gbar_h" )) 				gbar_h_i0 	= aXi_Gbar_h
+      //ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_h" )) 	gbar_h_i0 	= aXi0_Gbar_h
+      //ifsec "axon_iseg[1]" 	if( vdef( "aXi0_Gbar_h" )) 	gbar_h_i0 	= aXi1_Gbar_h
+    //}
+    //ifsec "axon_inode"       	if( vdef( "aXr_Gbar_h" )) 	gbar_h_i0 	= aXr_Gbar_h
+    //ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_h" )) 	gbar_h_i0 	= aXm_Gbar_h
+  }
+}
+
+//----------------------------------------------------------------------
+objref iss
+init_first = 1
+iss_unstable = 0 	// set 0 to find out; once set avoid running again
+proc init() {   local v0, v1 
+  if( init_first ){
+    init_first = 0
+    // calculate G_e_pas_slope to adjust e_pas for each trace's baseline
+    //G_e_pas_slope = 0
+    //G_e_pas += 1
+    mulfit_cell_init()
+    iss.init_steady_state	// init_steady_state()
+    if( check_iss_unstable()) return
+    v1 = v
+    //G_e_pas -= 1
+    mulfit_cell_init()
+    iss.init_steady_state	// init_steady_state()
+    if( check_iss_unstable()) return
+    v0 = v
+    G_e_pas_slope = 1/(v1-v0)
+    printf( "init: G_e_pas_slope %g\n", G_e_pas_slope )
+    
+  }
+  mulfit_cell_init()
+  init_last_call()	// hook to insert changes just before run() call
+  iss.init_steady_state() // init_steady_state()
+  if( check_iss_unstable()) return
+  dt=etr1.dt_sample
+}
+
+// Hook to insert changes just before run() call (can be redefined later)
+proc init_last_call(){
+}
+
+//----------------------------------------------------------------------
+func check_iss_unstable(){
+  if( iss.dV > iss_unstable_th ){
+    iss_unstable = 1
+    printf( ">>>init: UNSTABLE Steady State iss.dV=%g iss_unstable_th=%g; setting tstop=20<<<\n", \
+    iss.dV, iss_unstable_th )
+    tstop = 20
+    return 1
+  }
+  return 0
+}
+
+//----------------------------------------------------------------------
+objref stim
+proc do_cell(){
+  
+  forall delete_section()
+  chdir("/home/neuro/from_axon/n400td")
+  load_file( $s1 )	// load cell
+  if( numarg()>1 ) load_file( 1, $s2 )	// load axon
+  soma {
+    stim	= new IClamp(0.5)
+    stim.del 	= 20
+    stim.dur 	= 80
+    stim.amp 	= 0.8
+  }
+  chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE") 
+}
+
+//================================================================================
+// pDE interface related code
+
+begintemplate pDE_fit_case
+  strdef id, Mtemplate, Mfunc, scaleF, hoc_var, hoc_before, hoc_after, tgt_file, tgt_before, tgt_after
+  public id, Mtemplate, Mfunc, scaleF, hoc_var, hoc_before, hoc_after, tgt_file, tgt_before, tgt_after
+  public scaleF, tgt_bldiff
+  proc init(){
+    id		= $s1
+    Mtemplate 	= $s2
+    Mfunc	= $s3
+    scaleF	= $s4
+    hoc_var	= $s5
+    hoc_before	= $s6
+    hoc_after	= $s7
+    tgt_file	= $s8
+    tgt_before  = $s9
+    tgt_after  	= $s10
+    
+    tgt_bldiff	= 0	// baseline differential from avg of tgt set
+  }
+endtemplate pDE_fit_case
+
+proc dfc_do_cmd(){ localobj so, sf
+  sf = new StringFunctions()
+  so = new str_obj()
+  sprint( so.s1, "%s;", $s1 )
+  while( strcmp( so.s1, "")){
+    sf.head( so.s1, ";", so.s2  )
+    if( strcmp( so.s2, "" )) {
+      if( dfc_idebug ) printf( "\ndfc_do_cmd: %s\n", so.s2 )
+      if( numarg() == 1 ) execute( so.s2 )
+      if( numarg() == 2 ) execute( so.s2, $o2 )
+      if( numarg() == 3 ) $o3.append( new str_obj( so.s2 ))
+    }
+    sf.tail( so.s1, ";", so.s1  )
+  }
+}
+
+//----------------------------------------------------------------------------------------------------
+objref pDE_fc_list
+objref dfc_tgt, dfc_tgtL
+{ blmin=1 blMax=19 } // baseline limits (ms)
+
+func dfc_load_dfc_tgt(){ local i localobj fc_i, sf, str, pDE_fc_i
+  pDE_fc_i=$o1
+  sf=new StringFunctions() str=new str_obj()
+  dfc_tgt = new eTrace()
+  dfc_tgt.idebug = dfc_idebug
+  dfc_do_cmd( pDE_fc_i.tgt_before )
+  if( sf.head( pDE_fc_i.tgt_file, ".txt$", str.s1 ) >= 0 ) dfc_tgt.load_file_home( pDE_fc_i.tgt_file )
+  if( sf.head( pDE_fc_i.tgt_file, ".htf$", str.s1 ) >= 0 ) dfc_tgt.load_htf_1p0c( pDE_fc_i.tgt_file, "HOME" )
+  dfc_do_cmd( pDE_fc_i.tgt_after )
+  return dfc_tgt.vec_v.mean( round(blmin/dfc_tgt.dt_sample), round(blMax/dfc_tgt.dt_sample)) // return mean from blmin to blMax
+}
+
+func round(){ return int( 0.5 + $1 ) }
+
+proc dfc_load_traces(){ local i, j, tmp, bl_avg, bl_i localobj pDE_fc_i, blV
+  pDE_fc_list = new List()
+  dfc_tgtL = new List()
+  blV = new Vector()
+  bl_avg = 0
+  for i=0, pDE_fc_list.count-1 { 
+    bl_i = dfc_load_dfc_tgt( pDE_fc_list.o(i) )
+    dfc_tgtL.append( dfc_tgt )
+    blV.append( bl_i )
+    bl_avg += (bl_i - bl_avg)/(i+1)			// clever way to compute running avg
+  }
+  printf( "dfc_load_traces: found bl_avg %g.\n", bl_avg )
+  if( vdef( "BL_avg" )) {
+    printf( "dfc_load_traces: Using preset BL_avg %g\n", BL_avg )
+    bl_avg = BL_avg          // Use BL_avg if defined in pDE script
+  }
+  for i=0, pDE_fc_list.count-1 {
+    pDE_fc_list.o(i).tgt_bldiff = bl_avg - blV.x[i]
+    printf( "dfc_load_traces i %d bli %g bl_avg %g tgt_bldiff %g\n", i, blV.x[i], bl_avg, pDE_fc_list.o(i).tgt_bldiff )
+  }
+}
+
+//----------------------------------------------------------------------------------------------------
+strdef cell_file_name, axon_file_name	// so they can be defined in pDE VERBATIM
+proc pDE_init_cell(){
+  // Not needed here. Out so that dfc_run_agai works  pDE_asg()	// so that do_cell can use name_declared() calls
+    if( strcmp(cell_file_name,"")==0 ) cell_file_name = "n420t-pc2-L10000-ignoreD-newsoma.hoc"
+  if( strcmp(axon_file_name,"")==0 ) axon_file_name = "my-ca1-isegs-myelin.hoc"
+  //do_cell( cell_file_name, axon_file_name ) 
+  do_cell(cell_file_name)
+  if( vdef( "soma_diam_f")) forsec "soma" { diam *= soma_diam_f printf( "soma diam %s %g\n", secname(), diam ) }
+  
+  { cvode.active(0)
+    dt=etr1.dt_sample 
+    //cvode.active(1) cvode.atol(1.e-10)
+  }
+
+  iss = new initss( cvode, -80 )		// iss_v_init = -80
+  iss.idebug = 0.5
+  iss_unstable_th = 0.1
+  iss_unstable_penalty = 1e20
+  
+  print "init_cell done ******************"
+  execute( "access soma" )			// avoid sintax error if soma is not created at compile time
+}
+
+//----------------------------------------------------------------------------------------------------
+obfunc set_sim_stim(){ local i localobj eT, sT
+  { eT = $o1 sT=$o2 }
+  { eT.stim_amp=sT.amp eT.stim_del=sT.del eT.stim_dur=sT.dur }
+  return eT
+}
+
+//----------------------------------------------------------------------------------------------------
+objref dfc_i, dfc_tgt_i, dfc_eD, dfc_var, dfc_simL
+objref dfc_recL, dfc_simL_i, dfc_sim_recL
+
+dfc_first = 0
+func pDE_do_fit_case(){ local i,irec localobj sL, emch
+  if( !dfc_first ) {
+    dfc_first = 1
+    pDE_asg()                   // so that init_cell and load_traces can use vdef() calls
+    pDE_init_cell()
+  }
+  strdef str,cwd
+  dfc_i = pDE_fc_list.o($1)
+  print "dfc_i: ",dfc_i, " *****************"
+  
+  dfc_tgt_i=new datTrace()
+  cwd=getcwd()
+  chdir("/home/neuro/from_axon/dat_files/derived_dat/")
+  dfc_tgt_i.read_dat(dfc_i.id)
+  chdir(cwd)
+  dfc_tgt_i.vec_dv=dfc_tgt_i.deriv(dfc_tgt_i.vec_v,dfc_tgt_i.vec_t)
+  tstop = dfc_tgt_i.vec_t.x[ dfc_tgt_i.vec_t.size-1 ] 
+ 
+  emch=new eMatch()
+  emch.Dph_x_sz=5
+  emch.Dph_y_sz=50
+
+ 
+  dfc_simL=new List()
+  stim.amp=0.2
+  stim.dur=100
+  stim.del=21.07
+  dfc_var=new datTrace()
+  dfc_var.vec_v.record(&soma.v(0.5))   
+  dfc_var.vec_t.record(&t)
+  dfc_var.vec_dv.record(&soma.i_cap(0.5))  //1000 is just to scale as in the target phase plot
+  dfc_var.vec_dv.mul(100)  //originally mul(1000), 100 should be better 
+
+  if( ! iss_unstable ){		// run only if previous case was stable (ie not unstable); see init
+    //printf( "\n\t" )
+    system( "date" )
+    //printf( "case %s\n", dfc_i.id )
+    tgt_bldiff = dfc_i.tgt_bldiff
+    pDE_asg()
+    run()
+    print "dt= ", dt, " cvode.active()= ", cvode.active()
+    dfc_var.get_mat(emch)
+    //dfc_tgt_i.get_mat()
+  }  
+  if( iss_unstable ){
+    dfc_err = iss.dV / iss_unstable_th * iss_unstable_penalty
+  }else{
+    //dfc_err3=emch.Dph(mtr,dfc_var.mat)
+    //dfc_err2=residual(etr1,dfc_var.mat,1)
+    //dfc_err=dist(dfc_tgt_i, dfc_var)
+    dfc_err=dist_ver2(dfc_tgt_i,dfc_var)
+
+    if(abs(dfc_var.vec_v.max - dfc_tgt_i.vec_v.max)>5) {dfc_err=dfc_err*20}
+    if(abs(dfc_var.vec_v.max_ind - dfc_tgt_i.vec_v.max_ind)>15) {dfc_err=dfc_err*20}
+    //max_ind1=dfc_var.vec_v.max_ind
+    //max_ind2=dfc_tgt_i.vec_v.max_ind
+    //if(abs(max_ind1 - max_ind2)>0.3/dt) { dfc_err=dfc_err*10}
+    //if(dfc_var.vec_v.x[max_ind1-40]>-10|| dfc_var.vec_v.x[max_ind1+100]>-10) {dfc_err=dfc_err*10}
+    //if(abs(dfc_var.vec_dv.max-dfc_tgt_i.vec_dv.max)>20) {dfc_err=dfc_err*10}
+    //if(dfc_err>1.5) {dfc_err=dfc_err*5}
+    
+    //tgt_err=emch.Dph(mtr,dfc_tgt_i.mat)
+  }
+  
+  sprint(str,"dfc_scaleF=%s", dfc_i.scaleF)
+  execute(str)
+  print "dfc_err:  ", dfc_err //, "dfc_err2: ", dfc_err2, "  dfc_err3: ", dfc_err3
+  return dfc_err * dfc_scaleF
+}
+
+// end of pDE interface related code
+
