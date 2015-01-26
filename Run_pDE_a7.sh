@@ -25,7 +25,7 @@ echo "LOGS " $LOG " " $LOGE
 
 #mpirun -np <number of processes> <program name and arguments>
 mpirun -np $LAMN \
-    ~/Projects/ParSims/pDE/pDEtest $SPEC $LOG > $LOGE 2>&1 &
+    ~/Projects/ParSims/pDEdir/pDE $SPEC $LOG > $LOGE 2>&1 &
 
 # rm ~/MyTemp/pDE-*; rm kk.log; mpiexec -machinefile ~/Projects/ParSims/lam-axon+psd+spike+spine+dentate+axon2.def -ssi rpi tcp -n 29 ~/Projects/ParSims/pDE/pDE ~/Projects/ParSims/Runs_pDE/thin-1stspike/1spk-th-102406a-n420+Fix-h+Naf+KDR-v7-is2.pDE > kk.logE 2>&1 &
 
