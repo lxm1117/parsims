@@ -1,8 +1,7 @@
 #!/bin/bash
 
 # Run pDE 
-#LAMDEF=~/Projects/ParSims/lam-axon7.def
-LAMDEF=/Volumes/d1/Users/ximing/Projects/ParSims/lam-axon7.def
+LAMDEF=~/Projects/ParSims/lam-axon7.def
 LAMN=16
 
 unset DISPLAY
@@ -24,8 +23,9 @@ echo "LOGS " $LOG " " $LOGE
 #mpiexec -machinefile $LAMDEF -ssi rpi tcp -n $LAMN \
 #    /Volumes/d1/Users/ximing/Projects/ParSims/pDE/pDE $SPEC $LOG > $LOGE 2>&1 &
 
+#mpirun -np <number of processes> <program name and arguments>
 mpirun -np $LAMN \
-    /Volumes/d1/Users/ximing/Projects/ParSims/pDE/pDEtest $SPEC $LOG > $LOGE 2>&1 &
+    ~/Projects/ParSims/pDE/pDEtest $SPEC $LOG > $LOGE 2>&1 &
 
 # rm ~/MyTemp/pDE-*; rm kk.log; mpiexec -machinefile ~/Projects/ParSims/lam-axon+psd+spike+spine+dentate+axon2.def -ssi rpi tcp -n 29 ~/Projects/ParSims/pDE/pDE ~/Projects/ParSims/Runs_pDE/thin-1stspike/1spk-th-102406a-n420+Fix-h+Naf+KDR-v7-is2.pDE > kk.logE 2>&1 &
 

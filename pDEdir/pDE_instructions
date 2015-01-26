@@ -1,0 +1,264 @@
+~/Projects
+~/Projects/ParSims
+		lam files
+~/Projects/ParSims/Runs_pDE
+~/Projects/ParSims/Runs_pDE/thinstspike
+		
+ pDE files
+ 
+		log-cbest.hoc files
+		
+ main-ncell-Vbtim-simL-version.hoc files
+ 
+
+
+~/Projects/ParSims/pDE		
+		log files
+		logE files
+		log-cbest.hoc files
+		
+ Run_pDE.sh files
+ 
+		
+ c files for pDE
+            
+			pDE.c  eval_slave.c  load_job_spec.c  pop.c 
+                  		xmalloc.c  jString.c  random.c  jTime.c  jSort.c  NumRec.c
+		Makefile for pDE
+		Gen files to add or extract generations or parameters of a generation
+		assorted c files--correlation.c gammq.c
+		do_fft_filter    on wcp files
+		do_log_tmp	operations on log files
+		eMorph-p.hoc	morphology operations like spine corrections
+		
+ eTrace-p.hoc
+    Operations on traces (initSS, Stat, str_obj, jQueue, wcp routines, 
+			filter_KHz, spike width, e_Distance eMatch eval_match for matching traces)
+		getav.hoc  gets area and volume
+		load_wcp.hoc   loads a wcp file
+		main... old hoc files
+
+~/MyTemp
+	temporary log and error files go here.  This should be cleaned out periodically but 
+	contains useful information should something go wrong.
+
+
+ TO RUN
+
+
+ from ~/Projects/ParSims/pDE
+
+Run_pDE_a7.sh   (pDE file)    
+	~/Projects/ParSims/Runs_pDE/thinstspikespk-th-26b-n4-Passive-v8d.pDE
+
+logs get put in ~/Projects/ParSims/pDE
+ 	1spk-th-26b-n4-Passive-v8d.pDE-9.log-cbest.hoc.  To plot best fit, 
+		
+ nrngui 1spk-th-26b-n4-Passive-v8d.pDE-9.log-cbest.hoc
+
+  	1spk-th-26b-n4-Passive-v8d.pDE-9.log
+ 	1spk-th-26b-n4-Passive-v8d.pDE-9.logE
+
+
+ Run_pDE.sh file
+ 
+
+	receives lam definition file which defines nodes to use
+	sets up log names
+	runs mpiexec
+
+	mpiexec -machinefile $LAMDEF -ssi rpi tcp  
+		-n $LAMN  
+		~/Projects/ParSims/pDE/pDE $SPEC $LOG > $LOGE 2>&1 &
+
+	machinefile  boots the LAM run-time environment with schema provided (machines 
+		and nodes) runs the MPI program and then shuts down the LAM run-time 
+		environment
+	-ssi passes a key and its value.  Here rpi is the key meaning let's select which RPI 
+		to use to transport MPI messages.  tcp means use tcp
+	-n is a local variable to specify the number of copies of the process to start 
+		(= number of nodes)
+	process to run is specified.  Here it is the 
+ pDE program.
+   The pDE program sets up 
+		parallel differential evolution parameters and uses the SPEC file to define what 
+		is to be done,  i.e., sensitivity analysis, fits, initial population, hoc file to define 
+		cell, VERBATIM to provide additional info, fitcases and fixed parameter values 
+		and parameter vales to be fit. 
+
+
+ pDE program
+
+	
+ uses load_job_spec.c to load job specs
+	Reads lines of the SPEC file (ending with .pDE).  Lines can begin with:
+		
+ Tmp-dir
+   sets the temporary directory for error logs (~/MyTemp)  
+			This directory should be cleaned out periodically
+		
+ VERBATIM  
+ reads VERBATIM text
+		
+ abort_on_eval_error
+		Pop-init
+   (uniform, normal, random) (noset set) Ngen  logfile  
+		generation_number  (see pop.c)
+			if just starting out Pop-init uniform noset is appropriate
+			if starting from a previous run 
+				Pop-init uniform set logfile_name generation_number
+			random means chosen randomly within Fit-parm parameters
+			uniform means chosen uniformly within fit limits
+			normal=XX normal with mean set and SD is percent XX of fit limits
+			set | noset indicates using the set value (or not) for first member
+			Ngen means take a generation from the following log file
+			data from logfile substitutes for data randomly generated, chosen 
+			generation_number is the generation taken from a logfile to use to start.
+		
+ Fit-SA
+   either Fit-SA 0 0 so don't do sensitivity analysis or
+			Fit-SA 2 05  or maybe
+			Fit-SA  Pop_f 0 Best_Rad_Pcnt 0  Fit-SA Pop_f 2 Best_Rad_Pcnt 05
+			(not sure what these values mean)
+		
+ Fit-lims
+		nBest
+		Fit
+   name   seed   max_num_generations   dimension (multiplier of number 
+			of parameters to get population size, i.e.  means to fit 8 parameters, 
+			pop is )  strategy (3 seems to	be a good choice, see pDE.c)  
+			F  CR (0.85 and 1, see pDE.c file) var_lim_strategy when hit a boundary 
+			(randE, clip or bounceP)   hoc_file
+		
+ Fit-case
+   name  match_function_template (eMatch)  function  scale   
+			hoc_var (usually soma)  hoc_before   hoc_after  target_files   tgt_before  
+ 			tgt_after
+			eMatch is a template within e-Trace-p.hoc and computes a score
+			function  dfc_pkbeg(7.36, 05) (in the .pDE file, matches first spike to 
+			tmax, here 7.36, the 05 overrides a parameter.  
+			function dfc_eD.(dfc_simL_i.o(0),dfc_tgt_i)
+			function dfc_eD.DfpwPkdVa(dfc_simL_i.o(0), dfc_tgt_i)
+			function dfc_trim(1)
+			Hard to figure out.   is a function in eMatch in eTrace-p.hoc that sums 
+			up abs difference between two trace
+			DfpwPkdVa is a function in eMatch in eTrace-p.hoc that does a match 
+			between two traces that do action potentials
+			Don't understand the _i here
+			Scale  used to give passive traces more weight usually
+			Hoc_var  usually recording place
+			hoc_before  used to set baseline I believe, set stim params
+			hoc_after
+			target files  the 2 or 5 preceeding the file name indicates the trace number 
+			within the file
+			tgt_before
+			tgt_after
+		
+ Fit-parm
+   or 
+ Fit-parmLog
+   name  init  lo:hi    Name of parameter initial value 
+			min and max
+		
+ Subs-parm
+   subname   ?   ?
+		
+ Fit-lim
+   name lo hi
+		
+ Set-parm
+   name init l:hi  Fixed to init value.
+
+
+ VERBATIM code in the .pDE file   (dfc = do fit case)
+	
+	dfc_set_tgt()  
+ returns dfc_tgt with stim.amp, dur, del and cut at (in trace)
+	
+ dfc_sim_BBF()
+    executes dfc_simL_i.o(0).dc_shift with delay at start and end and 
+		amp
+	
+ dfc_seg_look_options()  
+ defines an eMatch with parameters for big spike  returns dI
+	
+ dfc_options_all()
+   assigns seg_look_options to eD and returns eD
+	
+ dfc_trim()  
+  trims traces from  to f2  assigns dfc_options_all(dfc_eD) to ED also 
+	  	compares tails of the simulation with eD. and start of train with 
+		DfpwPkdVa_aXe
+	    	Not sure what is really happening here  Return res which is the summed 
+		difference of the two parts
+	
+ dfc_pkbeg()  
+ matches first spike to tmax and may compare phase plots dV 
+		and ddV.  Return  error
+
+ 
+
+pDE code in the hoc file
+ 
+
+	
+ template pDE_fit_case
+   just defines variables in pDE Fit-case construct
+	
+ dfc_do_cmd()
+	dfc_load_dfc_tgt()
+	dfc_load_traces()  
+  forms a list of target traces and computes average baseline 
+		voltage and computes difference to be applied to targets
+	
+ pDE_init_cell()
+	set_sim_stim()
+	pDE_do_fit_case()  
+	template recSpec
+    sets up vecors for dV and ddV and other things
+	
+ dfc_run_againL() 
+  run again icase caseand return eTrace results.  Assigns 
+		dfc_i=pDE_fc_list.o(icase) and dfc_tgt_i = dfc_tgtL.o(icase)  where icase is 
+		input to this obfunc.  Uses recSpec template
+	
+ dfc_var_runsL()
+   return and plot if pG present rL for each parm value variation 
+		runs vp+ivp* to vp+ivp*k2 in ivp steps.  Input is icase, "var", vp, ivp, , k2 
+		and maybe pG and maybe opt
+	
+ plot_rLL_dt()
+	run_plot_all_axon_ddv()
+	axon_speed()
+	axon_color()
+	dfc_run_again()  
+   run again case icase and return eTrace results  
+		like dfc_run_againL above but different
+	
+ dfc_var_runs()
+	dfc_plot()
+	dfc_plot_place()
+	is_obj_name()
+	plot_gen(()
+	plot_axon()
+	dfc_pG_ddv()
+	dfc_pG_one_ddV()
+	dfc_plot_all()   
+ says that per fit-case:  dfc_simL has one list entry (with eTraces); 
+		dfc_tgtL has one eTrace
+	
+ dfc_plot_all_old()
+	rL_td_eT()
+
+TO USE
+
+	
+ Take a .pDE file, check the cell name and modify as needed.  Determine which 
+		target plots to use and decide if Passive fit or AP fit or both.  May be good to 
+		start with passive + H
+	Take one of the hoc files and put cell code as desired at the start.  Be sure to 
+		match the set (fixed) and fit parameters to those that are used in the code.
+
+	
+
+}
