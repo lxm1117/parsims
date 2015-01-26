@@ -1,0 +1,1083 @@
+
+
+// ------hoc_main--->>/axon/d1/Users/ximing/Projects/ParSims/Runs_pDE/thin-1stspike/main-n400-Vbtim-simL-v8d-reduced.hoc<<---------------
+// Initialize
+{ 
+  //  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  chdir("/home/neuro/from_axon/")
+  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  load_file( "stdrun.hoc" )
+  load_file( "eMorph-p.hoc" )
+  load_file( "do_log.hoc" )
+  load_file( "test_mat.hoc")
+  load_file("hoc51_deriv.hoc")
+}
+//objref RunEnv
+ 
+  RunEnv = new str_obj()
+  RunEnv.nsystem( "echo $cNeuro", RunEnv.s1 )	// get value of cNeuro environment var into RunEnv.s1
+  RunEnv.nsystem( "arch", RunEnv.s2 )		// get arch of machine we're running on on RunEnv.s2
+  if( ! strcmp( RunEnv.s2, "ppc" ) ) {		// NMOD_dll filename appropriate to our architecture on RunEnv.s3
+    sprint( RunEnv.s3, "%s/lib/nrn/NMOD/ca1n1-mod/powerpc/.libs/libnrnmech.so", RunEnv.s1 )
+  } else {
+    if( ! strcmp( RunEnv.s2, "i686" ) || ! strcmp( RunEnv.s2, "i386" ) ) {
+      sprint( RunEnv.s3, "/Volumes/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/i686/.libs/libnrnmech.so", RunEnv.s1 )
+    } else {
+      if( ! strcmp( RunEnv.s2, "x86_64" ) ) {
+	sprint( RunEnv.s3, "/home/neuro/from_axon/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1 )
+     	print RunEnv.s3
+	 } else {
+        printf( "\n\n\tUnknown architecture >>%s<<\n\n", RunEnv.s2 )
+      }
+    }
+  }
+ 
+  nrn_load_dll( RunEnv.s3 )
+}
+
+//================================================================================
+func vdef(){
+  if( name_declared( $s1 ) == 5 ) return 1
+  return 0
+}
+//================================================================================
+func Boltz(){
+  return 1/(1+exp(($1-$2)/$3))
+}
+
+func max(){ local i, im
+  im = $1
+  for i=1, numarg() if( $i>im ) im = $i
+  return im
+}
+
+func GaussLike(){ // x, A, W, D
+  return $2*exp(-($1-$4)^2/$3 )
+}
+
+// Perpendicular y distance
+func ydistP(){
+  if(ismembrane("morpho")) {
+     return abs(0.5*(y0_morpho+y1_morpho))
+  }//else {
+     //return abs( y3d(0)+y3d(n3d()-1) )/2
+  //}
+ return distance(0.5)
+}
+
+//================================================================================
+objref eM
+eM = new eMorph()
+eM.idebug = 1
+dfc_idebug = 0
+
+proc mulfit_cell_init() { 
+  soma { distance() }	// set soma(0.5) as reference point
+  adj_e_pas = G_e_pas - G_e_pas_slope * tgt_bldiff
+  printf( "adj_e_pas %g G_e_pas %g G_e_pas_slope %g tgt_bldiff %g\n", adj_e_pas, G_e_pas, G_e_pas_slope, tgt_bldiff )
+  forall {
+    do_pas()
+    do_Naf()      // does Naf and Nav16
+    do_h()
+    do_KDR()
+    do_KA()
+    do_KDM()
+  }
+  //forsec "dend" {do_h()}
+  
+  /*
+  Spnum = 30000
+  if( vdef( "Spine_number"))  Spnum = Spine_number
+  //eM.Spine_Comp_RmCm_f3d( "n400_af3d", Spnum )	// We perform Spine compensation after all else is set.
+  eM.use_morpho_xyz=1
+  eM.Spine_Comp_RmCm_n400_JAI(Spnum)
+  */
+
+  eM.idebug = 0						// show debug info only on first run
+  set_nseg( lambda_f_d )
+  ifsec "axon_hill" {
+	axon_hill {
+		diam(0:1)=soma.diam(1):diam(0)
+	}
+  }
+}
+
+//--------------------------------------------------------------------------------
+proc set_nseg(){ local ns, lfd 
+  nseg_tot = 0
+  lfd = $1
+  soma area( 0.5 )
+  forall { 
+    if( lfd <= 0 ) ns = 1
+    if( lfd >  0 ) ns = int((L/($1 *lambda_f(100))+.9)/2)*2 + 1 
+    if( ns > nseg ) nseg = ns
+    nseg_tot += nseg
+  }
+  printf( "lambda-d %g nseg_tot %d\n", lfd, nseg_tot )
+}
+
+//--------------------------------------------------------------------------------
+proc do_pas() {
+  if( !ismembrane("pas") ) insert pas
+  e_pas	= adj_e_pas
+  g_pas	= 1 / ( G_Rm * 1000 )
+  Ra	= G_Ra
+  cm	= G_cm
+  ifsec "soma" {
+    if( vdef( "soma_l")) L=soma_l
+    if( vdef( "soma_diam")) diam=soma_diam
+    if( vdef( "soma_cm" )) cm	= soma_cm
+    if( vdef( "soma_Rm" )) g_pas	= 1/ ( soma_Rm * 1000 )
+    if( vdef( "soma_Ra" )) Ra	= soma_Ra
+  }
+//  ifsec "axon_hill" return	// hillock same as rest of cell
+  ifsec "axon" {		// aX_ => generic for all axons but Hillock
+    if( vdef( "aX_cm" )) cm	= aX_cm
+    if( vdef( "aX_Rm" )) g_pas	= 1/ ( aX_Rm * 1000 )
+    if( vdef( "aX_Ra" )) Ra	= aX_Ra
+  }
+  ifsec "axon_mnode" {		// aXm_ special for myelin can override generic
+    if( vdef("aXm_cm"))	cm	= aXm_cm
+    if( vdef("aXm_Rm"))	g_pas	= 1/ ( aXm_Rm * 1000 )
+    if( vdef("aXm_Ra"))	Ra	= aXm_Ra
+  }
+  ifsec "axon_inode" {		// aXr_ special for nodes of Ranvier can override generic
+    if( vdef("aXr_cm"))	cm	= aXr_cm
+    if( vdef("aXr_Rm"))	g_pas	= 1/ ( aXr_Rm * 1000 )
+    if( vdef("aXr_Ra"))	Ra	= aXr_Ra
+  }
+  ifsec "axon_iseg[0]" {
+     //if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
+     L=30
+     diam=1
+  }
+  ifsec "axon_iseg[1]" {
+     //if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
+     L=40
+     diam=1
+  }
+  ifsec "axon_hill" {
+     if(vdef("aX_hill_l")) L=aX_hill_l
+     L=5
+     diam(0:1)=3.5:1
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_Naf(){ 
+  if( vdef( "Gbar_Naf" )){
+    if( !ismembrane("Naf_i0")) insert Naf_i0
+ 
+    ena = G_ena
+    gbar_Naf_i0 = Gbar_Naf	// default value unless overriden below
+
+    ifsec "soma" 	if(vdef("s0_Gbar_Naf"))			gbar_Naf_i0 	= s0_Gbar_Naf
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_Naf"))		gbar_Naf_i0 	= aXh_Gbar_Naf
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_Naf"))	          	gbar_Naf_i0 	= aXm_Gbar_Naf
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon_iseg" {
+	//if(!ismembrane("Naf_i1")){
+		insert Naf_i1
+		uninsert Naf_i0
+	//}		
+	ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_Naf" )) 	gbar_Naf_i1 	= aXi0_Gbar_Naf
+	ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_Naf" )) 	gbar_Naf_i1 	= aXi1_Gbar_Naf
+	}
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_Naf" )) 	gbar_Naf_i0 	= aXr_Gbar_Naf
+   }
+ }
+//--------------------------------------------------------------------------------
+proc do_Nap(){
+  if( vdef( "Gbar_Nap" )){
+    if( !ismembrane("Nap_i0") ) insert Nap_i0
+    ena = G_ena
+    gbar_Nap_i0 = Gbar_Nap
+
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_Nap"))		gbar_Nap_i1 	= aXh_Gbar_Nap
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_Nap"))		gbar_Nap_i1 	= aXm_Gbar_Nap
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon" if( vdef("aX_Gbar_Nap"))			gbar_Nap_i1	= aX_Gbar_Nap
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_Nap" )) 				gbar_Nap_i1 	= aXi_Gbar_Nap
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_Nap" )) 	gbar_Nap_i1 	= aXi0_Gbar_Nap
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_Nap" )) 	gbar_Nap_i1 	= aXi1_Gbar_Nap
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_Nap" )) 	gbar_Nap_i1 	= aXr_Gbar_Nap
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_Nap" )) 	gbar_Nap_i1 	= aXm_Gbar_Nap
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_KDR(){ local i
+  if( vdef( "Gbar_KDR" )){
+    if( !ismembrane("KDR_i1") ) insert KDR_i1
+    ek = G_ek
+    gbar_KDR_i1 = Gbar_KDR
+    if(vdef("Gbar_KDR_dslope") && !issection("axon.*")) 	gbar_KDR_i1 = Gbar_KDR *(1+Gbar_KDR_dslope*ydistP())
+
+    ifsec "soma" 	if(vdef("s0_Gbar_KDR"))			gbar_KDR_i1 	= s0_Gbar_KDR
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDR"))		gbar_KDR_i1 	= aXh_Gbar_KDR
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_KDR"))		gbar_KDR_i1 	= aXm_Gbar_KDR
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon" if( vdef("aX_Gbar_KDR"))			gbar_KDR_i1	= aX_Gbar_KDR
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KDR" )) 				gbar_KDR_i1 	= aXi_Gbar_KDR
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDR" )) 	gbar_KDR_i1 	= aXi0_Gbar_KDR
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDR" )) 	gbar_KDR_i1 	= aXi1_Gbar_KDR
+    }
+
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KDR" )) 	gbar_KDR_i1 	= aXr_Gbar_KDR
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KDR" )) 	gbar_KDR_i1 	= aXm_Gbar_KDR
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_KDRa(){ 
+  if( vdef( "Gbar_KDRa" )){
+    if( !ismembrane("KDRa_i1") ) insert KDRa_i1
+    ek = G_ek
+    gbar_KDRa_i1 = Gbar_KDRa
+
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDRa"))		gbar_KDRa_i1 	= aXh_Gbar_KDRa
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_KDRa"))		gbar_KDRa_i1 	= aXm_Gbar_KDRa
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon" if( vdef("aX_Gbar_KDRa"))			gbar_KDRa_i1	= aX_Gbar_KDRa
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KDRa" )) 				gbar_KDRa_i1 	= aXi_Gbar_KDRa
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXi0_Gbar_KDRa
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXi1_Gbar_KDRa
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXr_Gbar_KDRa
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXm_Gbar_KDRa
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_KDRb(){ 
+  if( vdef( "Gbar_KDRb" )){
+    if( !ismembrane("KDRb_i1") ) insert KDRb_i1
+    ek = G_ek
+    gbar_KDRb_i1 = Gbar_KDRb
+
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDRb"))		gbar_KDRb_i1 	= aXh_Gbar_KDRb
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_KDRb"))		gbar_KDRb_i1 	= aXm_Gbar_KDRb
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon" if( vdef("aX_Gbar_KDRb"))			gbar_KDRb_i1	= aX_Gbar_KDRb
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KDRb" )) 				gbar_KDRb_i1 	= aXi_Gbar_KDRb
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXi0_Gbar_KDRb
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXi1_Gbar_KDRb
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXr_Gbar_KDRb
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXm_Gbar_KDRb
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_KA(){ local i
+  if( vdef( "Gbar_KA" )){
+    if( !ismembrane("KA_i1") ) insert KA_i1
+    ek = G_ek
+    gbar_KA_i1 = Gbar_KA
+    soma { 
+	   if(vdef("s0_Gbar_KA")) 				gbar_KA_i1=s0_Gbar_KA
+    }
+
+    if(vdef("Gbar_KA_dslope") && !issection("axon.*")) 		gbar_KA_i1 = Gbar_KA *(1+Gbar_KA_dslope*ydistP() )
+
+    //ifsec "axon_hill" 	if(vdef("aXh_Gbar_KA"))		gbar_KA_i1 	= aXh_Gbar_KA
+    ifsec "axon_hill" 		if(vdef("s0_Gbar_KA"))		gbar_KA_i1	= s0_Gbar_KA
+		
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_KA"))			gbar_KA_i1 	= 0 //aXm_Gbar_KA
+
+    //ifsec "axon" if( vdef("aX_Gbar_KA"))			gbar_KA_i1	= aX_Gbar_KA
+    ifsec "axon_iseg" {	
+      //if( vdef( "aXi_Gbar_KA" )) 				gbar_KA_i1 	= aXi_Gbar_KA
+
+	ifsec "axon_iseg[0]"    if( vdef( "s0_Gbar_KA" ))	gbar_KA_i1	= s0_Gbar_KA
+	ifsec "axon_iseg[1]"	if( vdef( "s0_Gbar_KA" ))	gbar_KA_i1	= s0_Gbar_KA
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KA" )) 	gbar_KA_i1 	= 0 //aXr_Gbar_KA
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KA" )) 	gbar_KA_i1 	= 0  //aXm_Gbar_KA
+  }
+}
+//--------------------------------------------------------------------------------
+proc do_KAa(){ local i
+  if( vdef( "Gbar_KAa" )){
+    if( !ismembrane("KAa_i1") ) insert KAa_i1
+    ek = G_ek
+    gbar_KAa_i1 = Gbar_KAa
+    if(vdef("Gbar_KAa_dslope") && !issection("axon.*")) 	gbar_KAa_i1 = Gbar_KAa *(1+Gbar_KAa_dslope*ydistP() )
+
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KAa"))		gbar_KAa_i1 	= aXh_Gbar_KAa
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_KAa"))		gbar_KAa_i1 	= aXm_Gbar_KAa
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon" if( vdef("aX_Gbar_KAa"))			gbar_KAa_i1	= aX_Gbar_KAa
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KAa" )) 				gbar_KAa_i1 	= aXi_Gbar_KAa
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KAa" )) 	gbar_KAa_i1 	= aXi0_Gbar_KAa
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KAa" )) 	gbar_KAa_i1 	= aXi1_Gbar_KAa
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KAa" )) 	gbar_KAa_i1 	= aXr_Gbar_KAa
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KAa" )) 	gbar_KAa_i1 	= aXm_Gbar_KAa
+  }
+}
+//------------------------------------------------------------------------------
+proc do_KDM(){
+	ifsec "soma"		if( vdef( "Gbar_KDM")){
+		insert KDM_i1	
+		gbar_KDM_i1 = Gbar_KDM
+	}
+	ifsec "axon_hill"	if( vdef( "Gbar_KDM")){
+		insert KDM_i1
+		gbar_KDM_i1 = Gbar_KDM
+	}
+	ifsec "axon_iseg"	if( vdef( "Gbar_KDM")){
+		insert KDM_i1
+		gbar_KDM_i1 = Gbar_KDM
+	}
+}
+//--------------------------------------------------------------------------------
+proc do_h(){ local i
+  if( vdef( "Gbar_h" )){
+    if( !ismembrane("h_i0") ) insert h_i0
+    eh_i0 = G_eh
+    gbar_h_i0 = Gbar_h
+    if(vdef("Gbar_h_dslope") && !issection("axon.*")) 	gbar_h_i0 = Gbar_h *(1+Gbar_h_dslope*ydistP() )
+    //ifsec "dend" {
+    //	ydistp=abs(0.5*(y0_morpho+y1_morpho))
+    //	gbar_h_i0=Gbar_h*(1+Gbar_h_dslope*ydistp)
+    // }
+    //ifsec "axon_hill" 	if(vdef("aXh_Gbar_h"))			gbar_h_i0 	= aXh_Gbar_h
+    //ifsec "axon_mnode" if(vdef("aXm_Gbar_h"))			gbar_h_i0 	= aXm_Gbar_h
+    //if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    //ifsec "axon" if( vdef("aX_Gbar_h"))				gbar_h_i0	= aX_Gbar_h
+    //ifsec "axon_iseg" {	
+      //if( vdef( "aXi_Gbar_h" )) 				gbar_h_i0 	= aXi_Gbar_h
+      //ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_h" )) 	gbar_h_i0 	= aXi0_Gbar_h
+      //ifsec "axon_iseg[1]" 	if( vdef( "aXi0_Gbar_h" )) 	gbar_h_i0 	= aXi1_Gbar_h
+    //}
+    //ifsec "axon_inode"       	if( vdef( "aXr_Gbar_h" )) 	gbar_h_i0 	= aXr_Gbar_h
+    //ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_h" )) 	gbar_h_i0 	= aXm_Gbar_h
+  }
+}
+//----------------------------------------------------------------------
+objref iss
+init_first = 1
+iss_unstable = 0 	// set 0 to find out; once set avoid running again
+proc init() {   local v0, v1 
+  if( init_first ){
+    init_first = 0
+    // calculate G_e_pas_slope to adjust e_pas for each trace's baseline
+    G_e_pas_slope = 0
+    G_e_pas += 1
+    mulfit_cell_init()
+    iss.init_steady_state	// init_steady_state()
+    if( check_iss_unstable()) return
+    v1 = v
+    G_e_pas -= 1
+    mulfit_cell_init()
+    iss.init_steady_state	// init_steady_state()
+    if( check_iss_unstable()) return
+    v0 = v
+    G_e_pas_slope = 1/(v1-v0)
+    printf( "init: G_e_pas_slope %g\n", G_e_pas_slope )
+    
+  }
+  mulfit_cell_init()
+  init_last_call()	// hook to insert changes just before run() call
+  iss.init_steady_state() // init_steady_state()
+  if( check_iss_unstable()) return
+  dt=etr1.dt_sample
+}
+
+// Hook to insert changes just before run() call (can be redefined later)
+proc init_last_call(){
+}
+
+//----------------------------------------------------------------------
+func check_iss_unstable(){
+  if( iss.dV > iss_unstable_th ){
+    iss_unstable = 1
+    printf( ">>>init: UNSTABLE Steady State iss.dV=%g iss_unstable_th=%g; setting tstop=20<<<\n", \
+    iss.dV, iss_unstable_th )
+    tstop = 20
+    return 1
+  }
+  return 0
+}
+
+//----------------------------------------------------------------------
+objref stim
+proc do_cell(){
+  
+  forall delete_section()
+  //chdir("/axon/d1/Users/ximing/cNeuro/MCells/Reduced")
+  
+  load_file( 1, $s1 )	// load cell
+  if( numarg()>1 ) load_file( 1, $s2 )	// load axon
+  soma {
+    stim	= new IClamp(0.5)
+    stim.del 	= 20
+    stim.dur 	= 80
+    stim.amp 	= 0.8
+  }
+  //chdir("/axon/d1/Users/ximing/Projects/ParSims/pDE") 
+}
+
+//================================================================================
+// pDE interface related code
+
+begintemplate pDE_fit_case
+  strdef id, Mtemplate, Mfunc, scaleF, hoc_var, hoc_before, hoc_after, tgt_file, tgt_before, tgt_after
+  public id, Mtemplate, Mfunc, scaleF, hoc_var, hoc_before, hoc_after, tgt_file, tgt_before, tgt_after
+  public scaleF, tgt_bldiff
+  proc init(){
+    id		= $s1
+    Mtemplate 	= $s2
+    Mfunc	= $s3
+    scaleF	= $s4
+    hoc_var	= $s5
+    hoc_before	= $s6
+    hoc_after	= $s7
+    tgt_file	= $s8
+    tgt_before  = $s9
+    tgt_after  	= $s10
+    
+    tgt_bldiff	= 0	// baseline differential from avg of tgt set
+  }
+endtemplate pDE_fit_case
+
+proc dfc_do_cmd(){ localobj so, sf
+  sf = new StringFunctions()
+  so = new str_obj()
+  sprint( so.s1, "%s;", $s1 )
+  while( strcmp( so.s1, "")){
+    sf.head( so.s1, ";", so.s2  )
+    if( strcmp( so.s2, "" )) {
+      if( dfc_idebug ) printf( "\ndfc_do_cmd: %s\n", so.s2 )
+      if( numarg() == 1 ) execute( so.s2 )
+      if( numarg() == 2 ) execute( so.s2, $o2 )
+      if( numarg() == 3 ) $o3.append( new str_obj( so.s2 ))
+    }
+    sf.tail( so.s1, ";", so.s1  )
+  }
+}
+
+//----------------------------------------------------------------------------------------------------
+objref pDE_fc_list
+objref dfc_tgt, dfc_tgtL
+{ blmin=1 blMax=19 } // baseline limits (ms)
+
+func dfc_load_dfc_tgt(){ local i localobj fc_i, sf, str, pDE_fc_i
+  pDE_fc_i=$o1
+  sf=new StringFunctions() str=new str_obj()
+  dfc_tgt = new eTrace()
+  dfc_tgt.idebug = dfc_idebug
+  dfc_do_cmd( pDE_fc_i.tgt_before )
+  if( sf.head( pDE_fc_i.tgt_file, ".txt$", str.s1 ) >= 0 ) dfc_tgt.load_file_home( pDE_fc_i.tgt_file )
+  if( sf.head( pDE_fc_i.tgt_file, ".htf$", str.s1 ) >= 0 ) dfc_tgt.load_htf_1p0c( pDE_fc_i.tgt_file, "HOME" )
+  dfc_do_cmd( pDE_fc_i.tgt_after )
+  return dfc_tgt.vec_v.mean( round(blmin/dfc_tgt.dt_sample), round(blMax/dfc_tgt.dt_sample)) // return mean from blmin to blMax
+}
+
+func round(){ return int( 0.5 + $1 ) }
+
+proc dfc_load_traces(){ local i, j, tmp, bl_avg, bl_i localobj pDE_fc_i, blV
+  dfc_tgtL = new List()
+  blV = new Vector()
+  bl_avg = 0
+  for i=0, pDE_fc_list.count-1 { 
+    bl_i = dfc_load_dfc_tgt( pDE_fc_list.o(i) )
+    dfc_tgtL.append( dfc_tgt )
+    blV.append( bl_i )
+    bl_avg += (bl_i - bl_avg)/(i+1)			// clever way to compute running avg
+  }
+  printf( "dfc_load_traces: found bl_avg %g.\n", bl_avg )
+  if( vdef( "BL_avg" )) {
+    printf( "dfc_load_traces: Using preset BL_avg %g\n", BL_avg )
+    bl_avg = BL_avg          // Use BL_avg if defined in pDE script
+  }
+  for i=0, pDE_fc_list.count-1 {
+    pDE_fc_list.o(i).tgt_bldiff = bl_avg - blV.x[i]
+    printf( "dfc_load_traces i %d bli %g bl_avg %g tgt_bldiff %g\n", i, blV.x[i], bl_avg, pDE_fc_list.o(i).tgt_bldiff )
+  }
+}
+
+//----------------------------------------------------------------------------------------------------
+strdef cell_file_name, axon_file_name	// so they can be defined in pDE VERBATIM
+proc pDE_init_cell(){
+  // Not needed here. Out so that dfc_run_agai works  pDE_asg()	// so that do_cell can use name_declared() calls
+    if( strcmp(cell_file_name,"")==0 ) cell_file_name = "n420t-pc2-L10000-ignoreD-newsoma.hoc"
+  if( strcmp(axon_file_name,"")==0 ) axon_file_name = "my-ca1-isegs-myelin.hoc"
+  //do_cell( cell_file_name, axon_file_name ) 
+  do_cell(cell_file_name)
+  if( vdef( "soma_diam_f")) forsec "soma" { diam *= soma_diam_f printf( "soma diam %s %g\n", secname(), diam ) }
+  
+  { cvode.active(0)
+    dt=etr1.dt_sample 
+    //cvode.active(1) cvode.atol(1.e-10)
+  }
+
+  iss = new initss( cvode, -80 )		// iss_v_init = -80
+  iss.idebug = 0.5
+  iss_unstable_th = 0.1
+  iss_unstable_penalty = 1e20
+  
+  print "init_cell done ******************"
+  execute( "access soma" )			// avoid sintax error if soma is not created at compile time
+}
+
+//----------------------------------------------------------------------------------------------------
+obfunc set_sim_stim(){ local i localobj eT, sT
+  { eT = $o1 sT=$o2 }
+  { eT.stim_amp=sT.amp eT.stim_del=sT.del eT.stim_dur=sT.dur }
+  return eT
+}
+
+//----------------------------------------------------------------------------------------------------
+objref dfc_i, dfc_tgt_i, dfc_eD, dfc_var, dfc_simL
+objref dfc_recL, dfc_simL_i, dfc_sim_recL
+
+dfc_first = 0
+func pDE_do_fit_case(){ local i,irec localobj sL, emch
+  if( !dfc_first ) {
+    dfc_first = 1
+    pDE_asg()                   // so that init_cell and load_traces can use vdef() calls
+    pDE_init_cell()
+  }
+  strdef str
+  dfc_i = pDE_fc_list.o($1)
+  print "dfc_i: ",dfc_i, " *****************"
+  
+  dfc_tgt_i=new datTrace()
+  dfc_tgt_i.read_dat(dfc_i.id) 
+  dfc_tgt_i.vec_dv=dfc_tgt_i.deriv(dfc_tgt_i.vec_v,dfc_tgt_i.vec_t)
+  tstop = dfc_tgt_i.vec_t.x[ dfc_tgt_i.vec_t.size-1 ] 
+ 
+  emch=new eMatch()
+  emch.Dph_x_sz=5
+  emch.Dph_y_sz=50
+
+ 
+  dfc_simL=new List()
+  stim.amp=1.5
+  stim.dur=2
+  stim.del=5
+  dfc_var=new datTrace()
+  dfc_var.vec_v.record(&soma.v(0.5))   
+  dfc_var.vec_t.record(&t)
+  dfc_var.vec_dv.record(&soma.i_cap(0.5))  //1000 is just to scale as in the target phase plot
+  dfc_var.vec_dv.mul(1000) 
+
+  if( ! iss_unstable ){		// run only if previous case was stable (ie not unstable); see init
+    //printf( "\n\t" )
+    system( "date" )
+    //printf( "case %s\n", dfc_i.id )
+    tgt_bldiff = dfc_i.tgt_bldiff
+    pDE_asg()
+    run()
+    print "dt= ", dt, " cvode.active()= ", cvode.active()
+    dfc_var.get_mat(emch)
+    //dfc_tgt_i.get_mat()
+  }  
+  if( iss_unstable ){
+    dfc_err = iss.dV / iss_unstable_th * iss_unstable_penalty
+  }else{
+    dfc_err3=emch.Dph(mtr,dfc_var.mat)
+    dfc_err2=residual(etr1,dfc_var.mat,1)
+    dfc_err=dist(dfc_tgt_i, dfc_var)
+
+    if(abs(dfc_var.vec_v.max - dfc_tgt_i.vec_v.max)>5) {dfc_err=dfc_err*20}
+    if(abs(dfc_var.vec_v.max_ind - dfc_tgt_i.vec_v.max_ind)>15) {dfc_err=dfc_err*20}
+    //max_ind1=dfc_var.vec_v.max_ind
+    //max_ind2=dfc_tgt_i.vec_v.max_ind
+    //if(abs(max_ind1 - max_ind2)>0.3/dt) { dfc_err=dfc_err*10}
+    //if(dfc_var.vec_v.x[max_ind1-40]>-10|| dfc_var.vec_v.x[max_ind1+100]>-10) {dfc_err=dfc_err*10}
+    //if(abs(dfc_var.vec_dv.max-dfc_tgt_i.vec_dv.max)>20) {dfc_err=dfc_err*10}
+    //if(dfc_err>1.5) {dfc_err=dfc_err*5}
+    
+    //tgt_err=emch.Dph(mtr,dfc_tgt_i.mat)
+  }
+  
+  sprint(str,"dfc_scaleF=%s", dfc_i.scaleF)
+  execute(str)
+  print "dfc_err:  ", dfc_err, "  dfc_err2: ", dfc_err2, "  dfc_err3: ", dfc_err3
+  return dfc_err * dfc_scaleF
+}
+
+// end of pDE interface related code
+//=========================================
+
+// ------end hoc_main------
+
+//----- pDE VERBATIM -----
+cell_file_name="n400td-pc2-mM-axn-reduced.hoc"
+
+obfunc dfc_set_stims_etc(){
+  print "check pDE dfc_set_stims++++++++++++++++++++"
+  if(vdef("aX_hill_nseg"))\
+    execute( "if(axon_hill.nseg<aX_hill_nseg) axon_hill.nseg=aX_hill_nseg" )
+  if(vdef("aX_iseg_nseg")) \
+    execute( "for i=0,aX_iseg_n-1 {if(axon_iseg[i].nseg<aX_iseg_nseg) axon_iseg[i].nseg= aX_iseg_nseg }" )
+  //if(vdef("aX_prox_nseg")) \
+  //  execute( "for i=0,aX_prox_n-1 {if(axon_prox[i].nseg<aX_prox_nseg) axon_prox[i].nseg= aX_prox_nseg }" )
+  if( vdef("aX_mnode_nseg" )) \
+    execute( "forsec \"mnode\" if(nseg<aX_mnode_nseg) nseg= aX_mnode_nseg" )
+
+//  execute( "axon_prox.nseg = aX_prox_nseg" )
+//  execute( "for i=0,aX_iseg_n-1 {axon_iseg[i].nseg= aX_iseg_nseg }" )
+  stim.amp=$1
+  stim.dur=$2
+  stim.del=$3
+  print "check stim.del +++++++++++++++++++++++++++"
+  dfc_options_all( dfc_eD )
+  return stim
+}
+
+obfunc dfc_set_tgt(){
+  print "dfc_set_tgt()+++++++++++++++++++++++++++"
+  dfc_tgt.stim_amp=$1
+  dfc_tgt.stim_dur=$2
+  dfc_tgt.stim_del=$3
+  if( numarg()>3 ) dfc_tgt.cut_at2($4,$5)
+  return dfc_tgt
+}
+
+proc dfc_sim_BBF(){
+  dfc_simL_i.o(0).dc_shift(stim.del+BBFdelay,stim.del+stim.dur+BBFdelay,-BBF*stim.amp)
+}
+
+//================================================================================
+// New stuff for pkbeg posfix
+
+obfunc dfc_seg_look_options(){ local i localobj dI
+  dI = new eMatch() if( numarg()>0)dI =$o1
+  dI.seg_option	= 1101
+  dI.seg_dt	= 0.09
+  dI.seg_slp_dt	= 0.09
+  dI.seg_slp_th	= 10
+  dI.seg_v_th	= 0
+  dI.seg_tiny_last	= 0
+  if( strcmp(dfc_i.id,"102606b-2ms+1500pA-pkbeg") == 0 ){ dI.seg_dt=dI.seg_slp_dt= 0.02 }
+  return dI
+}
+
+obfunc dfc_options_all(){ local i localobj eD
+  if( numarg()==0 ) eD = dfc_seg_look_options()
+  if( numarg()> 0 ) eD = dfc_seg_look_options($o1)
+
+  eD.match_option	= 5.2
+  eD.alpha = eD.beta = eD.gamma = eD.delta = eD.eta = eD.mF1 = eD.mF2 = eD.pkP = eD.pkPs = 0
+
+  eD.ilog = 1
+  return eD
+}
+
+// rough match to train; 
+// necessary to avoid traces that don't return to baseline
+// also check spikes also appear in axon
+func dfc_trim(){ local i, t0_tail, f1, f2, r1, r2, res localobj eD
+  f1=$1   f2=$2
+
+  eD = dfc_options_all(dfc_eD)
+  eD.eta 		= 1
+  eD.mF2		= 200
+  eD.pkP		= 1500*5
+  eD.pkPs		= 1
+  eD.pkPsA		= 1
+  
+  t0_tail = stim.del + stim.dur		// end of stimulus
+
+  eD.tmin = t0_tail			// compare tails after end stimulus: axon vs tgt
+  r2 = eD.m0( dfc_simL_i.o(1), dfc_tgt_i ) 
+
+  eD.tmin = 0
+  printf( "\n\t >>dfc_trim: DfpwPkdVa_aXe: " )
+  r1 = eD.DfpwPkdVa_aXe(dfc_simL_i,dfc_tgt_i,-1,-1)	// 800=8.90, 400=15.2, 200=30.82, 1500=6.7  
+  
+  res = r1*f1 + r2*f2
+  printf( "\n\t dfc_trim t0_tail %g r1,2 %g %g f1,f2 %g %g ri*fi %g %g\n\t res %g<<\n",\
+  t0_tail, r1,r2, f1,f2, r1*f1, r2*f2, res )
+  return res
+}
+
+//================================================================================
+// match first spike (up to tmax)
+// gamma and delta to match dV and ddV; largely independent of trace length/stim.amp
+// eta scaled by trace length
+//================================================================================
+func dfc_pkbeg(){ local i, tmax, dV_f, eta_f, r1 localobj eD
+  tmax = $1
+  
+  dV_f = 45*2
+  eta_f = 300 + 100/(tmax-stim.del-1.1)	//  A + B/(time from stim.del to base of spike) A=for spike; B for before spike
+
+  eD = dfc_eD //  eD = dfc_options_all(dfc_eD)
+  // eD.mF2	= 200*10
+  eD.mF2        = 6000 * stim.amp       // peak time error proportional to stimulation amplitude  
+  eD.pkP        = 1500*5
+  eD.pkPs	= 1
+  eD.phi	= 600/116/10 	// range_dV/range_V	old=0.4 * 10
+  eD.phi_1 	= 0.5+0.15
+  eD.phi_2 	= 0.45-0.02
+  eD.chi	= 1000/116/100	// range_ddV/range_V 	old=0.02 * 8
+  eD.chi_1  	= 0.5+0.15	
+  eD.chi_2 	= 0.15	
+  if( numarg()>1) eD.chi_2=$2   // adhoc inserted to override
+  eD.phi*=dV_f eD.chi*=dV_f
+
+  eD.eta	= eta_f	
+  // eD.mF2=0   eD.pkP=1000*eta_f	// for initial pop for Naf & KDR parms
+
+  eD.tmax	= tmax
+  printf( "\n\t >>dfc_pkbeg: DfpwPkdVa: " )
+  r1 = eD.DfpwPkdVa(dfc_simL_i.o(0),dfc_tgt_i)	// 800=8.90, 400=15.2, 200=30.82, 1500=6.7  
+  printf( "\n\t dfc_pkbeg: r1 %g \n\t<<\n", r1 )
+  return r1
+}
+
+
+
+//----- ENDVERBATIM-----
+
+strdef  pDE_log_name
+proc pDE_asg(){
+  // hoc pDE gen variables
+  pDE_log_name = "1spk-th-102606b-n400-Passive-v8d-reduced.pDE-86.log"
+  pDE_gen_N = 38
+  pDE_Pop_ibest = 254
+  // hoc set variables
+  dfc_PassWgt = 1
+  RmCm_spine_gbar = 0
+  Spine_number = 30000
+  BL_avg = -74.3052
+  BBF = 1.6
+  BBFdelay = 0
+  lambda_f_d = 0.1
+  G_ena = 65.4
+  G_ek = -89.5
+  G_eh = -30
+  celsius = 35
+  G_Rm = 40 //31.2723
+  G_cm = 0.4809 //0.811984
+  G_Ra = 32.1024 //107.74
+  G_e_pas = -77.7604
+  soma_l = 13.5	//17.4308
+  soma_diam = 17  //24.4501
+  aX_hill_l = 5 //42.5208
+  aX_iseg_nseg = 2
+  aX_iseg_n = 2
+  aX_iseg_l = 58.3
+  aX_inode_n = 2
+  aX_inode_d = 0.4
+  aX_inode_l = 1
+  aX_mnode_nseg = 3
+  aX_mnode_n = 3
+  aX_mnode_d = 0.4
+  aX_mnode_l = 100
+  //aX_cm = 1
+  //aX_Rm = 40
+  //aX_Ra = 100
+  aXm_cm = 0.04
+  aXm_Rm = 100
+
+  aXr_Gbar_Naf = 3000
+  aXm_Gbar_Naf = 50
+  gates_n_Naf_i0 = 3 
+  tauG_n_Naf_i0 = 0.5
+  tauG_h_Naf_i0 = 0.5
+
+  gates_n_Naf_i1 = 3
+  tauG_n_Naf_i1 = 0.5
+
+  aXm_Gbar_KDR = 5
+  aXr_Gbar_KDR = 800
+  Gbar_KDR_dslope = 0
+  gates_n_KDR_i1 = 4
+  tauG_n_KDR_i1 =0.2 //0.5
+
+  Gbar_KA = 0.5 //3.9817//22.8697
+  s0_Gbar_KA= 0
+  //aXh_Gbar_KA= s0_Gbar_KA
+  //aXi0_Gbar_KA= s0_Gbar_KA
+  //aXi1_Gbar_KA= s0_Gbar_KA //0.1 
+
+  vhalf_n_KA_i1 = -30//-22.1692
+  slope_n_KA_i1 = -10
+  tauA_n_KA_i1 =  2
+  tauG_n_KA_i1=0.5
+  vhalfD_h_KA_i1 =-35
+  slope_h_KA_i1 = 8
+  tauA_h_KA_i1 = 50
+  Gbar_KA_dslope = 0.008
+
+  Gbar_KDM=5
+  vhalf_n_KDM_i1=-35
+  slope_n_KDM_i1=-10
+  tauA_n_KDM_i1=100
+  tauG_n_KDM_i1=0.5
+  vhalfD_h_KDM_i1=200
+  slope_h_KDM_i1=8
+  tauA_h_KDM_i1=1000
+
+  Gbar_h = 0.08664 //0.0536693 //0.24232
+  Gbar_h_dslope = 0.008 //0.00131903
+  gates_n_h_i0 = 1
+  vhalf_n_h_i0 = -92.07
+  slope_n_h_i0 = 10
+  tauA_n_h_i0 = 100
+  tau0_n_h_i0 = 0.001
+  tauF_n_h_i0 = 0
+  tauG_n_h_i0 = 0.5
+  tauDv_n_h_i0 = 0
+
+  // hoc fit variables
+  Gbar_Naf = 100	//564.3703251
+  s0_Gbar_Naf = 180	//2934.613315
+  aXh_Gbar_Naf = 500	//3545.109547
+  aXi0_Gbar_Naf = 2000	//5040.424367
+  aXi1_Gbar_Naf = 2500	//5858.930227
+  vhalf_n_Naf_i0 = -35	//-38.44379894
+  slope_n_Naf_i0 = -7	//-9.598696282
+  tauA_n_Naf_i0 = 0.001	//0.007876330484
+  vhalf_h_Naf_i0 = -55		//-66.39889686
+  slope_h_Naf_i0 = 8		//5.802146861
+  tauA_h_Naf_i0 = 5		//49.62560014
+  tauG_h_Naf_i0 = 0.4
+
+  vhalf_n_Naf_i1 = -40		//-40.51851447
+  slope_n_Naf_i1 = -10		//-9.151984974
+  tauA_n_Naf_i1 = 0.001	//0.006443370656
+  vhalf_h_Naf_i1 = -58		//-60.76709627
+  slope_h_Naf_i1 = 8		//9.596468476
+  tauA_h_Naf_i1 = 10		//28.52248985
+  tauG_h_Naf_i1 = 0.5 //0.7
+
+  Gbar_KDR = 80	//586.6743366
+  s0_Gbar_KDR = 80	//1373.24255
+  aXh_Gbar_KDR = 300	//3470.572292
+  aXi0_Gbar_KDR = 1500	//5972.678208
+  aXi1_Gbar_KDR = 3000	//3740.588542
+
+  vhalf_n_KDR_i1 = -8 //-3  //-12	//-6.44820409
+  slope_n_KDR_i1 = -11//-10	//-10.92037797
+  tauA_n_KDR_i1 = 1//10	//3.611119021
+  tauG_n_KDR_i1 = 0.3
+}
+// log pDE nfeval
+{ printf( "nfeval %g\n", 38255 ) }
+
+{ load_file( "nrngui.hoc" ) }
+
+// ---------- write_fit_var_list ----------
+begintemplate pDE_FitVar
+  strdef name
+  objref r, m, b
+  public name, best, mean, SD, CV, min, max, low, hi, median, r, m, b
+  proc init(){
+    name = $s1
+    best = $2
+    mean = $3
+    SD = $4
+    CV = $5
+    min = $6
+    max = $7
+    low = $8
+    hi = $9
+    median = $10
+    r = new Vector()
+    m = new Vector()
+    b = new Vector()
+  }
+  public add_r
+  proc add_r(){ local i
+    for i=1,numarg() r.append( $i )
+  }
+  public add_m
+  proc add_m(){ local i
+    for i=1,numarg() m.append( $i )
+  }
+  public add_b
+  proc add_b(){ local i
+    for i=1,numarg() b.append( $i )
+  }
+endtemplate pDE_FitVar
+
+objref pDE_fv
+pDE_fv = new List()
+
+{
+  pDE_fv.append( new pDE_FitVar( "Gbar_Naf", 564.37, 550.869, 544.694, 151.319, 27.7805, 203.379, 799.815, 200, 800 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0564371, 0.0809272, -0.0174682, -0.0195688, -0.0373565, 0.0594231, -0.0285663, 0.0240279, -0.0122946, -0.0522065, 0.0303183, -0.0358382, 0.0205964, -0.015206, -0.0174725, 0.00564429, -0.0129203, 0.0392355, -0.047138, -0.0178975, 0.0341177, 0.00243014, 0.00799372, 0.011417, -0.0300848 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.0564371, 0.231194, -0.173492, -0.120268, -0.173148, 0.00161166, -0.000192977, 4.03513e-07, -0.000261465, -0.000198569, 0.00212566, -0.000875746, 0.000184624, -2.21999e-07, -0.000354685, 6.50924e-05, -0.000818146, 0.0590631, -0.295733, -0.224308, 0.392326, 0.0279312, 0.000362171, 0.000150356, -0.000476801 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 513.953, 2736.43, 3248.41, 6466.3, 5905.72, -38.9941, -8.6709, 0.00654437, -64.4596, 6.05438, 31.2346, -42.1634, -8.1856, 0.00699636, -59.5718, 5.61175, 36.025, 483.786, 1416.8, 3798.58, 2867.06, 4143.14, -8.15503, -10.9499, 4.08773 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "s0_Gbar_Naf", 2934.61, 2916.69, 2862.36, 432.289, 15.1025, 1559.72, 3499.74, 1500, 3500 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0399385, 0.142535, 0.0313346, -0.00486627, 0.00602786, 0.062304, -0.019667, 0.0189542, 0.0443095, -0.0852219, 0.036974, -0.0161957, 0.0069782, 0.0122109, 0.0345396, 0.00863961, -0.0213599, 0.0362524, -0.0204676, -0.0487852, 0.0482638, -0.0180022, -0.0281636, 0.0426409, 0.0116164 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.0139801, 0.142535, 0.108937, -0.0104689, 0.00977987, 0.000591496, -4.65058e-05, 1.1142e-07, 0.000329848, -0.000113464, 0.000907412, -0.000138532, 2.18958e-05, 6.24025e-08, 0.000245428, 3.48765e-05, -0.000473452, 0.0191026, -0.0449483, -0.214022, 0.194271, -0.0724276, -0.000446653, 0.000196568, 6.44436e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 504.678, 2454.37, 2842.09, 6430.75, 5783.41, -39.8093, -8.6429, 0.00644524, -65.5461, 6.271, 29.7951, -42.2439, -8.14771, 0.00669682, -60.4675, 5.54738, 36.9346, 461.279, 1384.37, 4289.01, 2524.69, 4365.67, -6.67927, -11.4306, 3.64356 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "aXh_Gbar_Naf", 3545.11, 2961.33, 3153.91, 1502.88, 47.6512, 1003.31, 6999.16, 1000, 7000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0222828, 0.0669893, 0.137717, 0.0455924, 0.0274831, 0.068045, 0.00922145, 0.019132, 0.0654217, -0.0894244, 0.0386735, -0.0367191, 0.0273561, 0.0521944, 0.0274277, 0.0125063, -0.0179217, 0.0556457, -0.0111093, -0.0449648, 0.0599604, -0.0350267, -0.0251161, 0.0464311, 0.014741 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.00224356, 0.0192689, 0.137717, 0.0282128, 0.0128258, 0.000185816, 6.27219e-06, 3.23498e-08, 0.000140084, -3.42462e-05, 0.000273006, -9.03427e-05, 2.469e-05, 7.67234e-08, 5.60592e-05, 1.45217e-05, -0.000114263, 0.00843409, -0.00701753, -0.0567404, 0.0694227, -0.0405347, -0.000114574, 6.15667e-05, 2.35227e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 537.618, 2801.59, 2719.56, 6311.81, 5770.95, -38.7023, -8.7958, 0.00666214, -65.0438, 6.05423, 31.5314, -42.3555, -8.16291, 0.00663346, -59.9418, 5.60141, 35.9398, 489.357, 1277.85, 3855.35, 2861.8, 4286.2, -7.5964, -11.0622, 3.75383 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "aXi0_Gbar_Naf", 5040.42, 6255.77, 6400.79, 929.987, 14.5293, 5000.33, 8484.17, 5000, 8500 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0186083, 0.0651307, 0.0278805, 0.00909921, -0.00367147, 0.0586403, -8.85849e-05, 0.0162723, 0.0286927, -0.0448533, 0.0206381, -0.016442, -0.000117254, -0.00494952, 0.0179995, 0.0231329, -0.0117572, 0.0247998, -0.029438, -0.0072866, 0.0547321, -0.0132003, -0.0243255, 0.0287418, -0.00118549 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.00302776, 0.0302749, 0.0450554, 0.00909921, -0.00276889, 0.000258779, -9.73701e-08, 4.44636e-08, 9.92855e-05, -2.77586e-05, 0.000235437, -6.53735e-05, -1.71017e-07, -1.17575e-08, 5.94517e-05, 4.34077e-05, -0.000121138, 0.00607437, -0.0300506, -0.0148591, 0.102406, -0.0246864, -0.000179325, 6.15882e-05, -3.05707e-06 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 525.314, 2668.58, 2865.52, 6342.55, 5829.13, -39.7726, -8.77539, 0.00647956, -65.2375, 6.1239, 30.8854, -42.2219, -8.08395, 0.0069507, -60.1455, 5.36937, 36.3548, 477.077, 1448.06, 3771.51, 2425.28, 4316.37, -6.80993, -11.2622, 3.84759 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "aXi1_Gbar_Naf", 5858.93, 5608.78, 5811.4, 701.365, 12.0688, 5000.53, 7945.87, 5000, 8000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.00379623, 0.0674968, 0.0258216, 0.0325073, 0.10922, 0.0649552, -0.0057477, -0.0132949, 0.0446263, -0.0456071, -0.0100211, -0.00625195, 0.00839255, 0.00693285, 0.0290571, 0.00259862, -0.0166176, 0.0174241, -0.000415906, -0.0153722, 0.0451287, -0.0191503, -0.0666218, 0.0670169, 0.0441636 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.000819032, 0.0416019, 0.0553303, 0.0431037, 0.10922, 0.000380085, -8.3771e-06, -4.81697e-08, 0.000204757, -3.74256e-05, -0.000151584, -3.29607e-05, 1.62308e-05, 2.18371e-08, 0.000127259, 6.46566e-06, -0.000227026, 0.00565897, -0.000562953, -0.0415656, 0.111962, -0.047488, -0.000651222, 0.000190415, 0.000151009 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 539.935, 2620.59, 2832.36, 6150.29, 5176.68, -40.325, -8.72733, 0.0070441, -65.7919, 6.16372, 33.2733, -42.4488, -8.17936, 0.00674854, -60.5045, 5.60963, 36.8987, 483.071, 1258.98, 3917.96, 2430.1, 4434.33, -4.17324, -11.9746, 2.95044 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "vhalf_n_Naf_i0", -38.4438, -38.6423, -38.1162, 4.10402, 10.7671, -44.9855, -25.0132, -45, -25 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0300761, 0.0662701, 0.0354392, -0.00575729, -0.0336369, 0.115396, -0.0195951, 0.0118003, 0.028885, -0.058112, 0.03794, -0.0464252, 0.0128023, -0.0193343, 0.0115005, 0.0182599, -0.0285712, 0.0378702, -0.0453773, -0.0102121, 0.0276713, 0.00384977, -0.00422031, 0.010782, -8.12319e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 1.10893, 6.98043, 12.9777, -1.30462, -5.74844, 0.115396, -0.00488068, 7.30661e-06, 0.0226493, -0.00814959, 0.0980773, -0.0418281, 0.00423125, -1.04075e-05, 0.00860769, 0.00776431, -0.0667068, 2.10193, -10.4966, -4.719, 11.7322, 1.63146, -0.00705002, 0.00523541, -4.74678e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 586.962, 3128.43, 3648.57, 6351.06, 5592.29, -33.7178, -8.96205, 0.00704267, -63.7387, 5.63559, 36.1308, -44.2347, -7.92376, 0.00647875, -59.4369, 5.94315, 33.0368, 596.075, 855.621, 3496.53, 3527.95, 4220.54, -8.22647, -10.6684, 3.82621 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "slope_n_Naf_i0", -9.5987, -9.01044, -8.77602, 1.02222, 11.6478, -9.99974, -3.42338, -10, -3 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0206234, 0.0948563, 0.05932, 0.0448822, 0.00733605, 0.0871551, 0.138483, 0.0270582, 0.0968335, -0.0812439, 0.0111658, -0.0607629, 0.0237739, 0.04384, -0.00363426, 0.0348935, -0.00287514, 0.00144176, -0.0224986, -0.0389257, 0.0821145, -0.0145517, -0.000620722, 0.00801296, -0.00662648 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 3.05288, 40.1141, 87.213, 40.8327, 5.03342, 0.349912, 0.138483, 6.72652e-05, 0.304842, -0.0457433, 0.115885, -0.219796, 0.0315463, 9.47447e-05, -0.0109208, 0.0595682, -0.0269505, 0.321277, -20.8946, -72.2165, 139.777, -24.7583, -0.00416304, 0.015621, -0.0155461 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 571.486, 3214.4, 3919.29, 6759.14, 5855.58, -35.0454, -7.56069, 0.00735449, -61.9267, 5.54478, 33.4094, -44.5693, -7.80819, 0.00770692, -59.8608, 6.16998, 35.3429, 518.777, 1072.34, 3042.63, 4307.45, 3941.08, -7.99429, -10.7309, 3.69159 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "tauA_n_Naf_i0", 0.00787633, 0.00731632, 0.00676417, 0.00254117, 37.5681, 0.000150727, 0.00999837, 0.0001, 0.01 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.00813815, 0.0503269, 0.0173832, -0.0164997, -0.00807686, 0.0598773, -0.0348654, 0.045554, 0.00750817, -0.0291528, 0.0107224, -0.00997483, -0.000652775, -0.000362845, 0.038627, 0.0191355, -0.0175103, 0.0125316, -0.0346805, -0.0111461, 0.0422567, 0.0116226, 0.0103962, -0.00764296, -0.0482212 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 484.6, 8561.31, 10280.6, -6038.35, -2229.22, 96.7026, -14.025, 0.045554, 9.50807, -6.60278, 44.7653, -14.5143, -0.348434, -0.000315438, 46.6915, 13.1407, -66.0253, 1123.32, -12956.1, -8318.25, 28934.9, 7954.67, 28.0476, -5.99361, -45.5079 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 541.416, 2804.45, 3084.37, 6441.63, 5826.48, -38.7703, -8.68115, 0.00645603, -64.6663, 5.99089, 32.0896, -42.5422, -8.08268, 0.00687757, -60.0808, 5.55832, 36.026, 508.359, 1343.35, 3732.67, 2885.04, 4104.55, -8.14747, -10.8274, 4.13584 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "vhalf_h_Naf_i0", -66.3989, -65.5702, -64.602, 3.21804, 4.98134, -67.9999, -49.1015, -68, -48 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( -0.0186057, 0.0770718, 0.011089, 0.0068046, -0.0216523, 0.0409243, 0.0153097, 0.0242005, 0.0880613, -0.0574358, 0.0327003, 0.00391696, -0.016619, 0.000862848, 0.0261863, -0.0126497, 0.0140256, -0.00644795, -0.0266225, -0.00881019, 0.0514021, -0.00619679, -0.0152625, 0.0137293, -0.0104617 )
+  pDE_fv.o(pDE_fv.count-1).add_m( -0.874877, 10.3533, 5.17872, 1.96647, -4.71907, 0.0521915, 0.00486314, 1.91102e-05, 0.0880613, -0.0102724, 0.107806, 0.00450071, -0.00700493, 5.92338e-07, 0.0249955, -0.00685963, 0.0417619, -0.456415, -7.85377, -5.19202, 27.7938, -3.34909, -0.0325154, 0.0085019, -0.00779642 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 488.175, 3531.2, 3488.47, 6527.83, 5506.54, -34.7445, -8.46185, 0.00799873, -58.913, 5.28261, 39.3569, -42.3496, -8.53757, 0.00691371, -58.1502, 5.20406, 38.2773, 486.472, 748.344, 3340.99, 4876.3, 3942, -10.0583, -10.3187, 3.32435 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "slope_h_Naf_i0", 5.80215, 5.89661, 5.94622, 0.575546, 9.67918, 5, 8.08282, 5, 15 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( -0.0407977, 0.0177249, -0.0192626, -0.0117424, -0.0311032, 0.0468382, -0.0277841, 0.0366326, 0.0163972, 0.0263505, -0.0316533, 0.00142158, -0.0098456, -0.0304654, -0.0048374, 0.040306, 0.0243101, -0.0323611, -0.0368881, 0.0179799, 0.0250222, 0.0131466, 0.00778502, -0.0213607, -0.0376123 )
+  pDE_fv.o(pDE_fv.count-1).add_m( -10.7262, 13.3131, -50.2988, -18.9738, -37.9027, 0.333988, -0.0493468, 0.000161741, 0.0916816, 0.0263505, -0.583473, 0.00913302, -0.0232035, -0.000116938, -0.0258175, 0.122209, 0.404723, -12.8078, -60.8454, 59.245, 75.6495, 39.727, 0.0927335, -0.0739599, -0.156723 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 608.475, 2783.2, 3453, 6513.61, 6036.78, -40.1022, -8.48259, 0.00580241, -65.1471, 5.78954, 35.8619, -42.6947, -7.94707, 0.00757078, -59.6114, 4.92053, 33.1728, 592.115, 1617.51, 3324.12, 2630.93, 3922.13, -8.50917, -10.4282, 4.75993 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "tauA_h_Naf_i0", 49.6256, 32.8402, 32.3924, 10.6092, 32.752, 5.38545, 49.9862, 5, 50 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.00716659, 0.0527672, 0.0211317, 0.00733227, -0.00742686, 0.0424146, -0.0341442, 0.0258121, 0.00103505, -0.0583592, 0.0658511, 0.0101617, -0.0237742, -0.0139694, 0.0298002, 0.0126213, 0.0109865, 0.0110838, -0.0303768, 0.00756437, 0.0287226, -0.0114853, -0.00395911, 0.00611695, -0.0125643 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.102217, 2.15009, 2.99347, 0.642738, -0.490984, 0.0164075, -0.00328986, 6.18267e-06, 0.000313958, -0.00316597, 0.0658511, 0.00354169, -0.00303959, -2.90886e-06, 0.00862817, 0.00207603, 0.00992268, 0.237979, -2.7182, 1.35218, 4.71088, -1.88283, -0.00255843, 0.00114898, -0.00284015 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 541.383, 2792.71, 3056.94, 6379.97, 5827.31, -38.6477, -8.66945, 0.00656389, -64.6121, 6.04878, 30.2593, -42.7551, -7.98658, 0.00696967, -60.0444, 5.57996, 35.258, 508.249, 1343.76, 3632.6, 2928.16, 4219.35, -7.87488, -10.9052, 3.92002 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "vhalf_n_Naf_i1", -40.5185, -42.2918, -42.6404, 3.69764, 8.67167, -56.2832, -35.0888, -58, -35 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.016451, 0.0406429, 0.0228059, 0.00208996, -0.00507802, 0.0486312, -0.0235632, 0.0233072, 0.0171497, -0.0438304, 0.0142679, 0.0299983, -0.0277954, -0.0160324, 0.0174713, 0.0172558, -0.0259304, -0.00496508, -0.030106, 0.00279723, 0.0423202, -0.00175525, -0.00973905, 0.0108896, -0.0141115 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.673226, 4.75154, 9.26929, 0.525642, -0.963195, 0.053976, -0.00651409, 1.60177e-05, 0.0149253, -0.00682231, 0.0409371, 0.0299983, -0.0101962, -9.5786e-06, 0.0145138, 0.00814374, -0.0671949, -0.305866, -7.72948, 1.43465, 19.9152, -0.825594, -0.0180571, 0.00586877, -0.0091523 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 573.401, 3064.97, 3549.16, 6423.2, 5770.33, -35.8146, -9.05378, 0.00744717, -63.9656, 5.65532, 34.138, -41.3612, -8.51981, 0.006467, -59.1461, 5.99446, 32.7142, 502.915, 926.125, 3737.57, 3929.95, 4123.15, -8.72772, -10.6177, 3.43776 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "slope_n_Naf_i1", -9.15198, -8.32153, -8.08504, 1.35641, 16.7768, -9.99927, -3.18537, -10, -3 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0330413, 0.0407132, 0.0280819, -0.00682945, -0.0144006, 0.0744725, -0.0180285, 0.0294671, -0.0159968, -0.0255714, -0.00194163, -0.125457, 0.124191, -0.00404081, -0.0336763, -0.00310801, -0.0182734, 0.030779, -0.0159775, -0.00805599, 0.0361363, -0.0133412, 0.0029916, 0.0105408, -0.0299871 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 3.68603, 12.9753, 31.1142, -4.68243, -7.44617, 0.225328, -0.0135866, 5.52052e-05, -0.037952, -0.0108504, -0.0151864, -0.342, 0.124191, -6.58119e-06, -0.0762632, -0.00399858, -0.129086, 5.16885, -11.1825, -11.2635, 46.3567, -17.1063, 0.0151206, 0.0154861, -0.0530183 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 574.496, 2967.26, 3405.47, 6362.93, 5751.2, -36.2944, -8.88587, 0.0072105, -64.9088, 5.8585, 32.2696, -45.4055, -7.08095, 0.00682223, -60.3815, 5.61488, 34.5357, 557.748, 1165.3, 3585.34, 3455.55, 4020.05, -7.8355, -10.7428, 3.39936 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "tauA_n_Naf_i1", 0.00644337, 0.00709981, 0.00687544, 0.00220916, 32.1312, 0.000261007, 0.00999987, 0.0001, 0.01 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.00313155, 0.064, 0.0359081, 0.00294722, 0.00197085, 0.0642497, -0.0107036, 0.0368251, 0.0435567, -0.0381548, -0.000272358, -0.0121362, -0.00415118, 0.0308462, 0.0348217, 0.0252695, -0.0176188, 0.0101578, -0.0362803, -0.0279553, 0.0422771, -0.000941773, 0.000434135, 0.00200712, -0.0161435 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 214.499, 12523.5, 24428, 1240.69, 625.707, 119.359, -4.95272, 0.0423595, 63.4481, -9.94034, -1.30796, -20.3132, -2.5488, 0.0308462, 48.4177, 19.961, -76.4188, 1047.37, -15590.7, -23998.3, 33299.5, -741.43, 1.34727, 1.81053, -17.5248 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 543.219, 2776.25, 2985.96, 6392.26, 5807.1, -38.9368, -8.74196, 0.00647293, -65.0382, 6.01457, 32.4014, -42.5007, -8.06752, 0.00666336, -60.0978, 5.50997, 36.1048, 508.756, 1362.91, 3841.4, 2851.81, 4163.46, -7.96702, -10.8804, 3.94851 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "vhalf_h_Naf_i1", -60.7671, -59.431, -59.765, 3.07172, 5.13966, -67.8259, -55.0008, -68, -55 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( -0.0128977, 0.0479673, 0.0247275, 0.0185517, -0.0339086, 0.0498934, -0.0285816, 0.0255085, 0.048237, -0.0384072, 0.0230657, 0.0101579, -0.0186128, 0.0104274, 0.0804315, 0.00422917, 0.0193979, 0.0252001, -0.00283647, 0.00344032, 0.0504179, 0.0041801, 0.0141886, -0.0119002, -0.0105619 )
+  pDE_fv.o(pDE_fv.count-1).add_m( -0.635363, 6.75054, 12.0983, 5.61669, -7.74236, 0.066661, -0.0095115, 2.11027e-05, 0.0505348, -0.00719633, 0.0796648, 0.0122278, -0.00821906, 7.49933e-06, 0.0804315, 0.00240263, 0.0605097, 1.86875, -0.876633, 2.12403, 28.5604, 2.36677, 0.0316676, -0.0077203, -0.00824602 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 506.722, 3265.8, 3876.96, 6736.47, 5348.68, -34.1322, -9.34447, 0.00802537, -61.5818, 5.51614, 37.1536, -41.9096, -8.57625, 0.00732364, -54.958, 5.7908, 39.1958, 627.643, 1203.32, 3803.34, 4787.67, 4299.81, -6.06514, -11.3294, 3.3352 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "slope_h_Naf_i1", 9.59647, 5.45097, 5.64721, 1.74507, 30.9015, 3.00452, 11.4934, 3, 15 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.00961618, 0.0362939, -0.0108364, -0.0203404, -0.0352055, 0.0388846, -0.0373004, 0.0433557, 0.020984, -0.024931, 0.00253727, 0.00714333, -0.0275072, -0.0260376, 0.022746, 0.0254905, -0.00288461, 0.0194062, -0.0183004, 0.0298103, 0.0468241, 0.00947887, 0.026598, -0.0154469, -0.0417549 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.833837, 8.99072, -9.33247, -10.8398, -14.1495, 0.091448, -0.0218496, 6.31345e-05, 0.0386961, -0.00822256, 0.0154253, 0.015136, -0.0213808, -3.29621e-05, 0.0400381, 0.0254905, -0.0158389, 2.53313, -9.9556, 32.3964, 46.6892, 9.44702, 0.104494, -0.0176396, -0.0573821 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 539.985, 2811.59, 3206.61, 6462, 5891.31, -38.6326, -8.65263, 0.00640763, -64.8205, 5.99266, 32.3053, -42.7259, -7.9643, 0.00706158, -59.9911, 5.50326, 35.6688, 501.652, 1311.93, 3493.45, 2817.09, 4105.01, -8.54786, -10.7684, 4.15207 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "tauA_h_Naf_i1", 28.5225, 36.8296, 35.5794, 9.58189, 26.931, 5.65336, 49.9973, 5, 50 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( -0.00221549, 0.0556822, -0.0188521, -0.0133606, -0.0472121, 0.0444539, -0.0325146, 0.0491657, -0.01296, -0.0170195, 0.0171392, 0.00423331, -0.0114577, -0.0148305, 0.0452376, 0.011683, 0.0868422, -0.0113727, -0.0367123, 0.0110888, 0.0666975, 0.0318956, 0.0474887, -0.0499898, -0.0548956 )
+  pDE_fv.o(pDE_fv.count-1).add_m( -0.0349874, 2.51211, -2.95687, -1.29674, -3.45578, 0.0190401, -0.00346873, 1.3039e-05, -0.00435256, -0.00102229, 0.0189767, 0.00163363, -0.00162194, -3.41926e-06, 0.0145021, 0.00212773, 0.0868422, -0.27036, -3.63732, 2.19471, 12.1121, 5.78937, 0.0339778, -0.0103966, -0.0137394 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 545.939, 2772.98, 3259.11, 6446.92, 5934.36, -38.7936, -8.6526, 0.00630025, -64.4471, 5.9826, 31.7172, -42.6985, -8.02733, 0.0069971, -60.2809, 5.57151, 32.4896, 525.577, 1385.13, 3598.31, 2649.82, 3952.38, -9.16666, -10.4981, 4.31686 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "Gbar_KDR", 586.674, 498.465, 515.958, 227.788, 44.1485, 29.0677, 995.249, 20, 1000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.057478, 0.0839706, 0.0342441, 0.0206423, -0.0117051, 0.0841636, -0.0119397, 0.0137799, 0.0354146, -0.0751098, 0.0236345, -0.0116162, 7.1168e-05, 0.0166893, 0.00756553, -0.0178271, -0.0125473, 0.124798, -0.0425146, -0.0362932, 0.054581, -0.00288216, -0.00182297, 0.0436997, -0.00837358 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.0381825, 0.159357, 0.225933, 0.0842761, -0.0360403, 0.00151637, -5.35804e-05, 1.53727e-07, 0.000500316, -0.000189778, 0.00110077, -0.000188564, 4.23785e-07, 1.61858e-07, 0.000102021, -0.000136572, -0.000527803, 0.124798, -0.177186, -0.302161, 0.416938, -0.0220059, -5.48665e-05, 0.000382304, -8.81585e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 524.994, 2780.14, 3037.34, 6357.3, 5830, -38.8986, -8.74837, 0.00668485, -64.8601, 6.04414, 31.8245, -42.5431, -8.08526, 0.00679193, -59.8176, 5.71767, 35.8517, 451.567, 1347.13, 3832.3, 2865.64, 4169.71, -7.92945, -11.0652, 3.8735 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "sO_Gbar_KDR", 1373.24, 980.122, 1255.71, 949.339, 75.6016, 200.036, 6034.04, 200, 7000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0522238, 0.0634873, 0.0461701, 0.035147, 0.00576106, 0.0761836, -0.0123085, -0.00217468, 0.0181801, -0.0543334, 0.025417, -0.0277012, 0.0138273, -0.0195817, 0.0165639, 0.059436, -0.0175274, 0.0571664, 0.104659, 0.00192396, 0.0773343, -0.0200955, -0.00476958, 0.0376448, 0.0552607 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.00832414, 0.0289094, 0.0730909, 0.0344306, 0.00425623, 0.000329344, -1.32534e-05, -5.82113e-09, 6.16263e-05, -3.29401e-05, 0.000284044, -0.000107895, 1.97563e-05, -4.55675e-08, 5.35948e-05, 0.000109255, -0.000176908, 0.0137167, 0.104659, 0.00384342, 0.141746, -0.0368153, -3.44442e-05, 7.90213e-05, 0.000139598 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 534.242, 2826.06, 3062.13, 6357.55, 5806.06, -38.5298, -8.75937, 0.00677148, -64.6794, 5.98759, 32.0357, -42.5049, -8.10985, 0.00693266, -59.8323, 5.51002, 35.8015, 498.733, 1124.29, 3671.57, 2902.77, 4204.59, -7.9145, -10.9672, 3.65272 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "aXh_Gbar_KDR", 3470.57, 3784.04, 3676.4, 1896.46, 51.5847, 104.315, 6999.01, 100, 7000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0162561, 0.0264935, 0.0222773, -0.00901944, -0.0159947, 0.0716475, -0.00629461, 0.0441579, 0.0212874, -0.0275939, -0.0220696, -0.0105495, -0.00657817, -0.027241, -0.00332993, -0.000910609, -0.0261873, -0.00809259, -0.0355244, 0.0696018, 0.0590595, 0.00292923, -0.00889834, 0.00673278, -0.0340785 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.00129707, 0.00603907, 0.017654, -0.00442297, -0.0059153, 0.000155049, -3.39288e-06, 5.91696e-08, 3.61219e-05, -8.37431e-06, -0.000123462, -2.0569e-05, -4.70492e-06, -3.17326e-08, -5.39353e-06, -8.37919e-07, -0.000132312, -0.000972017, -0.017783, 0.0696018, 0.0541884, 0.00268634, -3.21678e-05, 7.07476e-06, -4.30942e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 539.926, 2840.16, 3089.01, 6417.05, 5833.15, -38.6862, -8.76354, 0.00654663, -64.7348, 5.97701, 32.8463, -42.5648, -8.06774, 0.0069921, -59.7451, 5.65029, 36.0658, 519.531, 1321.09, 3420.52, 2881.54, 4148.48, -7.83949, -10.894, 3.98645 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "aXi0_Gbar_KDR", 5972.68, 2897.77, 3080.76, 1740.04, 56.481, 500.214, 6968.96, 500, 7000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( -0.0036388, 0.0599585, 0.0400909, 0.0457025, 0.0159742, 0.0182572, -0.00473211, 0.0363475, 0.0513931, -0.0491698, 0.00153683, 0.0201506, -0.0131408, 0.0114062, 0.0546575, 0.0144212, 0.00561897, 0.0387007, -0.0295209, -0.0149616, 0.126344, -0.0173557, -0.0350366, 0.0467291, 0.00611186 )
+  pDE_fv.o(pDE_fv.count-1).add_m( -0.000316439, 0.0148958, 0.0346266, 0.0244263, 0.00643878, 4.30609e-05, -2.77996e-06, 5.30822e-08, 9.50465e-05, -1.62636e-05, 9.37016e-06, 4.28206e-05, -1.02436e-05, 1.44813e-08, 9.64875e-05, 1.44629e-05, 3.0942e-05, 0.00506628, -0.0161061, -0.0163065, 0.126344, -0.0173474, -0.000138045, 5.35165e-05, 8.42357e-06 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 545.669, 2816.47, 3047.23, 6325.54, 5791.57, -38.2489, -8.76745, 0.00660063, -64.8948, 5.99633, 32.3636, -42.7723, -8.05348, 0.00683083, -60.0622, 5.60265, 35.4841, 500.35, 1305.33, 3726.64, 2691.52, 4211.8, -7.53247, -11.0329, 3.80207 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "aXi1_Gbar_KDR", 3740.59, 4272.56, 4158.36, 1739.21, 41.8244, 501.28, 6998.03, 500, 7000 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.00242484, 0.0302679, 0.00388377, -0.0189983, -0.0166905, 0.041388, -0.0298391, 0.0571501, -0.005565, -0.020649, 0.00558136, 0.00360417, -0.0118505, -0.0267055, 0.0142059, 0.0137141, 0.0262549, -0.0110996, -0.0474408, 0.017698, 0.0509631, 0.0450873, -0.00880813, 0.00546168, -0.0373508 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.000210972, 0.00752324, 0.00335602, -0.0101587, -0.00673071, 9.76638e-05, -1.75379e-05, 8.35026e-08, -1.02969e-05, -6.83327e-06, 3.40463e-05, 7.66264e-06, -9.24224e-06, -3.39217e-08, 2.50899e-05, 1.37603e-05, 0.000144647, -0.00145374, -0.0258954, 0.0192981, 0.0509876, 0.0450873, -3.47207e-05, 6.258e-06, -5.15028e-05 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 543.817, 2831.07, 3139.95, 6443.03, 5839.39, -38.5223, -8.70309, 0.00641693, -64.5592, 5.97464, 32.2508, -42.6723, -8.04661, 0.0070165, -59.8693, 5.58999, 34.9779, 522.003, 1363.4, 3596.15, 2868.73, 3970.87, -7.81337, -10.894, 4.04219 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "vhalf_n_KDR_i1", -6.4482, -8.41218, -7.95775, 6.85578, 86.1521, -18.9988, 9.47612, -19, 10 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0127382, 0.0455522, 0.0336685, 0.0159111, 0.00477721, 0.0491064, -0.0248213, 0.0356784, 0.0259945, -0.0370283, -0.00124094, -0.0069609, 0.00901746, 0.0123146, 0.00995679, 0.0296925, -0.0136078, 0.0369919, -0.0140553, -0.0069148, 0.0554047, -0.013018, 0.0505128, -0.0307132, -0.0299381 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 0.281153, 2.87228, 7.38058, 2.15834, 0.488722, 0.0293962, -0.00370093, 1.32246e-05, 0.0122016, -0.00310854, -0.00192033, -0.00375433, 0.0017841, 3.96818e-06, 0.00446112, 0.00755794, -0.0190187, 1.22908, -1.94628, -1.91279, 14.0621, -3.30247, 0.0505128, -0.00892749, -0.0104725 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 546.932, 2885.22, 3212.64, 6417.96, 5815.29, -37.8823, -8.80547, 0.0068694, -64.5049, 5.92149, 32.3771, -42.6703, -8.07084, 0.00690702, -59.7295, 5.70735, 35.428, 525.738, 1240.22, 3661.18, 3192.66, 4132.08, -7.55579, -10.939, 3.74468 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "slope_n_KDR_i1", -10.9204, -10.9483, -10.868, 1.99278, 18.3363, -14.9741, -6.20147, -15, -6 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0274896, 0.0858051, 0.0247058, -0.000554074, -0.00885119, 0.045681, 0.00882357, 0.0344452, 0.0524219, -0.0692296, 0.0161357, -0.00613322, -0.0135492, -0.00980842, 0.0334822, 0.0147248, -0.0102054, 0.0586236, -0.0339554, -0.0450916, 0.0402906, -0.00465545, -0.0650949, 0.0863124, 0.0345186 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 2.08737, 18.6134, 18.6321, -0.258574, -3.11519, 0.0940773, 0.00452613, 4.3924e-05, 0.0846534, -0.0199945, 0.085903, -0.0113803, -0.00922241, -1.08734e-05, 0.0516101, 0.0128945, -0.0490705, 6.70104, -16.176, -42.912, 35.1806, -4.06305, -0.223946, 0.0863124, 0.0415409 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 567.38, 3064.65, 3356.4, 6397.98, 5777.55, -37.0938, -8.72683, 0.00724153, -63.682, 5.72892, 33.326, -42.7641, -8.18527, 0.00675727, -59.2041, 5.78735, 35.0461, 588.784, 1079.91, 3210.03, 3463.1, 4114.2, -10.3916, -9.92994, 4.27948 )
+}
+{
+  pDE_fv.append( new pDE_FitVar( "tauA_n_KDR_i1", 3.61112, 3.26704, 3.82802, 2.39818, 62.6482, 1.00001, 20.2024, 1, 50 ))
+  pDE_fv.o(pDE_fv.count-1).add_r( 0.0315341, 0.0644851, 0.0272181, 0.0425296, 0.0315269, 0.0929948, -0.00686972, 0.0101466, 0.0346148, -0.0439375, -1.02728e-05, -0.00919372, 0.000783941, 0.0204856, 0.0320183, 0.0295481, -0.0504157, 0.0679787, 0.0336653, -0.0434338, 0.0546918, -0.061588, -0.0796405, 0.0966048, 0.158852 )
+  pDE_fv.o(pDE_fv.count-1).add_m( 1.98971, 11.6239, 17.0568, 16.4925, 9.22026, 0.159142, -0.00292819, 1.07516e-05, 0.0464484, -0.0105447, -4.5445e-05, -0.0141753, 0.000443396, 1.8871e-05, 0.0410107, 0.0215011, -0.201435, 6.45684, 13.3266, -34.3469, 39.6826, -44.6648, -0.227671, 0.0802743, 0.158852 )
+  pDE_fv.o(pDE_fv.count-1).add_b( 537.078, 2817.86, 3088.62, 6337.65, 5776.11, -38.7254, -8.76481, 0.00672301, -64.7798, 5.98659, 32.3926, -42.5861, -8.08674, 0.0068032, -59.9219, 5.5649, 36.3505, 491.241, 1204.7, 3807.88, 2928.85, 4329.34, -7.08622, -11.1753, 3.21993 )
+}
+
+// ---------- begin write_eval_hoc ----------
+objref pDE_eval 
+pDE_fc_list = new List() // must be defined (using objref) previously
+
+proc pDE_do_all(){ local i
+  pDE_eval = new Vector() 
+  for i=0, pDE_fc_list.count-1 pDE_eval.append( pDE_do_fit_case( i ))
+
+  printf( "Error Sum %g\nDetail: ", pDE_eval.sum() )
+  for i=0,pDE_eval.size-1 printf( " %10g", pDE_eval.x[i] )
+  printf( "\n" )
+}
+
+pDE_fc_list.append( new pDE_fit_case( "dat_files/2ms+1500pA_072006b_002_tr2_chopped.dat", "eMatch", "dfc_pkbeg(7.36,0.05)", "1", "soma", "dfc_set_stims_etc(1500/1000,2,5);dfc_eD.pkPs=3;", "dfc_sim_BBF()", "2:cNeuro/Data/Grover-2006/072006b/ACSF_0kHz/2ms+1500pA.htf", "blMax=4", "dfc_set_tgt(1500/1000,2,21,7.36+1+16,16)" ))
+
+pDE_do_all()
+// ---------- end write_eval_hoc ----------
+
+
+//dfc_plot_all()
+

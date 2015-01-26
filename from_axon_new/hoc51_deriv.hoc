@@ -1,0 +1,108 @@
+begintemplate datTrace
+  strdef cpath
+  //objref this
+  public vec_v, vec_t, vec_dv, vec_ddv, read_dat, deriv, cpath
+  objref vec_v, vec_t, vec_dv, vec_ddv 	
+  
+  proc init(){
+	vec_t=new Vector()
+	vec_v=new Vector()
+	vec_dv=new Vector()
+	vec_ddv=new Vector()
+	cpath=getcwd()
+  }
+ 
+  //read from .dat file
+  //usage: datTrace.read_dat(filename)  
+  proc read_dat(){local i, vecsize, dv_flag  localobj file
+	chdir("/axon/d1/Users/ximing/Projects/ParSims/pDE/dat_files")
+	file=new File()
+	file.ropen($s1)
+        if(numarg()==2){dv_flag=$2}
+	if(numarg()==1){dv_flag=0}
+	print file.isopen(), vecsize, dv_flag
+
+	vecsize=file.scanvar()
+	
+	vec_v=new Vector(vecsize)
+	vec_t=new Vector(vecsize)
+	i=0
+	while(i<vecsize){
+		vec_t.x[i]=file.scanvar()
+		vec_v.x[i]=file.scanvar()
+		//print time.x[i], vec.x[i]
+		i=i+1
+	}
+	
+	file.close()
+	chdir(cpath)
+	if(dv_flag>0){
+	 vec_dv=deriv(vec_v,vec_t)
+	 //vec_ddv=deriv(vec_dv,vec_t)
+	}
+
+  }
+  
+  //calculate the 1st derivative
+  //usage: datTrace.deriv(vec_v, vec_t)
+  obfunc deriv(){local i, j, tmp, tmp_t localobj vec, time, dv
+        vec=$o1
+        time=$o2
+        //dv=new Vector(vec.size()-1)
+	dv=new Vector(vec.size())
+	dv.x[vec.size()-1]=0
+	i=0
+	j=0
+	while( i<dv.size()-1) {
+		tmp=time.x[i+1]-time.x[i]
+		if(tmp>0){
+			dv.x[i]=(vec.x[i+1]-vec.x[i])/tmp
+			i=i+1
+		}
+		if(tmp==0){  
+			j=i
+			tmp_t=j
+			while(time.x[j+1]==time.x[j]){j=j+1}
+			tmp=(time.x[j+1]-time.x[j])// /(j+1-i)
+			while(i<=j){
+				dv.x[i]=(vec.x[j]-vec.x[tmp_t])/tmp ///1000
+				i=i+1
+			}
+		}
+	}
+	return dv
+   }
+
+   objref mat 
+   public mat, get_mat,tmin,tmax,imin,imax 
+   obfunc get_mat(){ local it, x_n, x_m, x_M, x_i, y_n, y_m, y_M, y_i localobj ech
+	tmin=vec_t.x[0]
+	tmax=vec_t.x[vec_t.size-1] //consider that vec_dv.size
+	imin=int(0.5+tmin/(vec_t.x[1]-vec_t.x[0]))
+	imax=int(0.5+tmax/(vec_t.x[1]-vec_t.x[0]))
+
+	ech=$o1
+	x_m=ech.Dph_x_m
+	x_M=ech.Dph_x_M	
+	x_sz=ech.Dph_x_sz
+	y_m=ech.Dph_y_m
+	y_M=ech.Dph_y_M
+	y_sz=ech.Dph_y_sz
+	
+	x_n=int(0.5+(x_M-x_m)/x_sz)
+	y_n=int(0.5+(y_M-y_m)/y_sz)
+	
+	mat=new Matrix(x_n,y_n,2)
+	for it=imin,imax {
+		x_i=int((vec_v.x[it]-x_m)/x_sz)
+		y_i=int((vec_dv.x[it]-y_m)/y_sz)
+		if(x_i<18 || x_i>=x_n || y_i<0 || y_i>=y_n){
+		}else{
+			//print x_i,y_i,it, imax, vec_v.size, vec_dv.size
+			mat.x[x_i][y_i]+=1
+		} 
+	}
+	return mat
+    }	
+
+endtemplate datTrace

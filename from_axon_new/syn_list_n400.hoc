@@ -1,0 +1,74 @@
+//similar to part of syn.hoc, this file is just a shortcut to run the following lines
+//used together with PlotShape[0].color_list(syn_list, color) to produce the figure
+//assuming the morphology file has loaded, PlotShape[0] already existed
+
+objref allsec, somasec, syn_listsec, syn_dend, soma_alone
+allsec=new SectionList()
+somasec=new SectionList()
+syn_dend=new SectionList()
+syn_listsec=new SectionList()
+soma_alone=new SectionList()
+//forsec "sph" { syn_list.append() }
+//PlotShape[0].color_list(syn_list,2)
+
+forall allsec.append()
+forsec "soma" somasec.append()
+soma soma_alone.append()
+
+sph_y389_L618_T4_d4_R1761_B1762_Adend_apical { syn_listsec.append() }
+sph_y353_L550_T4_d20_R310_B311_Adend_apical { syn_listsec.append() }
+sph_y293_L487_T4_d20_R302_B303_Adend_apical { syn_listsec.append() }
+sph_y282_L567_T4_d4_R2065_B2066_Adend_apical { syn_listsec.append() }
+sph_y172_L335_T4_d4_R2092_B2093_Adend_apical { syn_listsec.append() }
+sph_y138_L376_T4_d4_R2100_B2101_Adend_apical { syn_listsec.append() }
+sph_y148_L390_T4_d4_R240_B241_Adend_apical   { syn_listsec.append() }
+sph_y106_L169_T4_d14_R153_B154_Adend_apical  { syn_listsec.append() }
+
+spn_y389_L618_T4_d4_R1761_B1762_Adend_apical { syn_listsec.append() }
+spn_y353_L550_T4_d20_R310_B311_Adend_apical { syn_listsec.append() }
+spn_y293_L487_T4_d20_R302_B303_Adend_apical { syn_listsec.append() }
+spn_y282_L567_T4_d4_R2065_B2066_Adend_apical { syn_listsec.append() }
+spn_y172_L335_T4_d4_R2092_B2093_Adend_apical { syn_listsec.append() }
+spn_y138_L376_T4_d4_R2100_B2101_Adend_apical { syn_listsec.append() }
+spn_y148_L390_T4_d4_R240_B241_Adend_apical   { syn_listsec.append() }
+spn_y106_L169_T4_d14_R153_B154_Adend_apical  { syn_listsec.append() }
+
+seg_y389_L618_T4_d4_R1761_B1762_Adend_apical { syn_dend.append() }
+seg_y353_L550_T4_d20_R310_B311_Adend_apical { syn_dend.append() }
+seg_y293_L487_T4_d20_R302_B303_Adend_apical { syn_dend.append() }
+seg_y282_L567_T4_d4_R2065_B2066_Adend_apical { syn_dend.append() }
+seg_y172_L335_T4_d4_R2092_B2093_Adend_apical { syn_dend.append() }
+seg_y138_L376_T4_d4_R2100_B2101_Adend_apical { syn_dend.append() }
+seg_y148_L390_T4_d4_R240_B241_Adend_apical   { syn_dend.append() }
+seg_y106_L169_T4_d14_R153_B154_Adend_apical  { syn_dend.append() }
+
+forall diam=diam*1.75
+
+PlotShape[0].color_list(allsec, 9)
+PlotShape[0].color_list(somasec,1)
+PlotShape[0].color_list(syn_listsec,5)
+PlotShape[0].color_list(soma_alone, 4)
+k=0
+
+objref syn_scale
+syn_scale=new Vector(8)
+syn_scale.x[0]=0.25
+syn_scale.x[1]=0.23
+syn_scale.x[2]=0.87
+syn_scale.x[3]=0.67
+syn_scale.x[4]=0.49
+syn_scale.x[5]=0.81
+syn_scale.x[6]=0.27
+syn_scale.x[7]=0.91
+
+strdef label
+forsec syn_dend {
+	
+	xdist=x3d(n3d()-1)-x3d(0)
+	ydist=y3d(n3d()-1)-y3d(0)
+	PlotShape[0].mark(x3d(0)+xdist*syn_scale.x[k], y3d(0)+ydist*syn_scale.x[k], "t", 9, 5,2 )
+	sprint(label, "syn%d", k)
+	PlotShape[0].label(x3d(0)+xdist*syn_scale.x[k]+10, y3d(0)+ydist*syn_scale.x[k], label)
+	k=k+1
+	print secname(),k
+}

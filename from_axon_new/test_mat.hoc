@@ -1,0 +1,144 @@
+load_file("eTrace-p.hoc")
+//chdir("/axon/d1/Users/ximing/cNeuro/Data/Grover-2006/102606b/ACSF_20kHz")
+
+objref etr1,etr2,etr3,etr4,etr5,emch
+emch=new eMatch()
+etr1=new eTrace()
+etr2=new eTrace()
+etr3=new eTrace()
+etr4=new eTrace()
+etr5=new eTrace()
+
+etr1.load_htf_1p0("/home/neuro/from_axon/2ms+1500pA.htf",1)
+etr2.load_htf_1p0("/home/neuro/from_axon/2ms+1500pA.htf",2)
+etr3.load_htf_1p0("/home/neuro/from_axon/2ms+1500pA.htf",3)
+etr4.load_htf_1p0("/home/neuro/from_axon/2ms+1500pA.htf",4)
+etr5.load_htf_1p0("/home/neuro/from_axon/2ms+1500pA.htf",5)
+
+emch.Dph_x_sz=5
+emch.Dph_y_sz=50
+
+tmin=etr1.vec_t.x[0]
+tmax=etr1.vec_t.x[etr1.vec_t.size-1]
+imin=int(0.5+tmin/etr1.dt_sample)
+imax=int(0.5+tmax/etr1.dt_sample)
+
+nrow=int(0.5+(emch.Dph_x_M-emch.Dph_x_m)/emch.Dph_x_sz)
+ncol=int(0.5+(emch.Dph_y_M-emch.Dph_y_m)/emch.Dph_y_sz)
+
+func residual() {local res localobj et1, et2, mt1, mt2
+//can be used for two etraces as default, e.g.:residual(etrace1,etrace2)
+//also be used for one etrace and a matrix, e.g.:residual(etrace1,matrix1,1)
+//for two matrices, emch.Dph(matrix1, matrix2)
+
+	et1=$o1
+	et2=$o2
+
+	mt1=new Matrix(nrow,ncol,2)
+	mt2=new Matrix(nrow,ncol,2)
+	
+	emch.mat_VdV_sum(et1,mt1,imin,imax)
+
+	if(numarg()>2){mt2=$o2}
+	if(numarg()==2){ emch.mat_VdV_sum(et2,mt2,imin,imax) }
+	
+	res=emch.Dph(mt1,mt2)
+	return res
+
+}
+		
+
+objref mtr
+mtr=new Matrix(nrow,ncol,2)
+emch.mat_VdV_sum(etr1,mtr,imin,imax)
+emch.mat_VdV_sum(etr2,mtr,imin,imax)
+emch.mat_VdV_sum(etr3,mtr,imin,imax)
+emch.mat_VdV_sum(etr4,mtr,imin,imax)
+emch.mat_VdV_sum(etr5,mtr,imin,imax)
+
+
+func dist() {local i_var, i_tgt, j_var, j_tgt, k, res localobj var, tgt
+	var=$o1
+	tgt=$o2
+	res=0
+        
+        if(var.vec_dv.size==0) {  var.vec_dv=var.deriv(var.vec_v, var.vec_t)  }
+	if(tgt.vec_dv.size==0) {  tgt.vec_dv=tgt.deriv(tgt.vec_v, tgt.vec_t)  }
+	for k=0, var.vec_t.size-1{
+		i_var=(var.vec_v.x[k]-emch.Dph_x_m)/emch.Dph_x_sz
+		i_tgt=(tgt.vec_v.x[k]-emch.Dph_x_m)/emch.Dph_x_sz
+		j_var=(var.vec_dv.x[k]-emch.Dph_y_m)/emch.Dph_y_sz
+		j_tgt=(tgt.vec_dv.x[k]-emch.Dph_y_m)/emch.Dph_y_sz
+		res+=sqrt((i_var-i_tgt)^2+(j_var-j_tgt)^2)
+	}
+	return res
+}
+
+//this version 2 written on May 8, 2014
+//var and tgt are both datTrace()
+func dist_ver2() { local i_v, j_dv, k, res localobj var, tgt
+	var=$o1
+	tgt=$o2
+	res=0
+
+	var.vec_dv=var.deriv(var.vec_v, var.vec_t)
+	tgt.vec_dv=tgt.deriv(tgt.vec_v, tgt.vec_t)
+	for k=0, var.vec_t.size-1{
+		i_v=(var.vec_v.x[k]-tgt.vec_v.x[k])^2/tgt.vec_v.size
+		j_dv=(var.vec_dv.x[k]-tgt.vec_dv.x[k])^2/tgt.vec_dv.size
+		res+=i_v+j_dv
+	}
+	return res
+}
+	 
+
+//load_file("hoc51_deriv.hoc")
+
+/*
+objref file, dtr
+file=new File()
+strdef fname
+chdir("/axon/d1/Users/ximing/Projects/ParSims/pDE/dat_files")
+fname="2ms+1500pA.dat"
+
+dtr=new datTrace()
+dtr.read_dat(fname)
+dtr.get_mat()
+
+//to find residue
+emch.Dph(mtr,dtr.mat)
+
+objref g
+g=new Graph()
+
+proc Dph_plot(){local i, j,k, val localobj mt
+	mt=$o1
+	for i=0, mt.nrow-1{
+		for k=0,mt.sprowlen(i)-1{
+			val=mt.spgetrowval(i,k,&j)
+			if(val>0){
+				mt.x[i][j]=1
+				g.mark(i*emch.Dph_x_sz+emch.Dph_x_m,j*emch.Dph_y_sz+emch.Dph_y_m,"t",5,$2,1) //color as an input
+			}
+		}
+	} 
+}
+*/
+
+/*------------------------------------------------------------------------
+matrix.sprowlen(row_number)
+gives the number nonzero entries in the row
+e.g. matrix.sprowlen(18)=4, indicating there are 4 nonzeros entries
+to list these nonzero entries:
+matrix.spgetrowval(row_num, jth nonzero entry, column address of the entry)
+-----------------------------------------------------------------------------*/
+/*---------------------------------------------------------------------------
+short codes to compare two phase plots
+dtr=new datTrace()
+dtr.read_dat("100ms+400pA.dat")
+dtr.get_mat()
+emch.Dph(mtr,dtr.mat)
+Dph_plot(mtr,3)
+Dph_plot(dtr.mat,2)
+------------------------------------------------------------------------------*/
+// to double check the residual, try residual(etr1,etr1), residual(etr2,etr2),  residual(etr1,etr3) residual(etr3,etr1),etc. 

@@ -1,0 +1,485 @@
+
+nsyn=0
+//forsec "dend_apical" {nsyn=nsyn+1}
+forsec "sph" {nsyn=nsyn+1}
+
+stim.amp=0
+stim.dur=0
+
+objref syn[nsyn],r[nsyn]
+use_mcell_ran4(1)
+
+proc syn_set_col4(){ local k
+	k=0
+	//forsec "dend_apical"{
+	forsec "sph"{
+		syn[k]=new expsyn2c_col4(0.5)
+		syn[k].tot_num=$1  //total stimulation number
+		syn[k].num=$2 	//number of stimulation in each group
+		syn[k].ampar_tot=$3
+		syn[k].nmdar_tot=$4
+		syn[k].del=10
+		syn[k].interval_s=$5  //short interval
+		syn[k].interval_l=$6  //long interval
+		
+		r[k]=new Random(k*10+11)
+		r[k].uniform(0,1)
+		syn[k].setRandObjRef(r[k])		
+
+		k=k+1
+	}
+}
+
+forsec "soma" {
+	 insert ca1ca
+	 insert ca1L
+}
+
+actk= 1 //.75
+actna=1  //.75
+actca= 1 //.19
+nai0_na_ion=10*actna
+nao0_na_ion=145*actna
+ki0_k_ion=140*actk
+ko0_k_ion=2.5*actk
+cai0_ca_ion=2e-5*actca
+cao0_ca_ion=2*actca
+
+forall insert kext
+forall insert kextna1
+forall{ 
+	fhspace_kext=500
+	kbath_kext=ko0_k_ion
+} 
+
+forsec "sp" {
+	uninsert kext
+	uninsert kextna1
+}
+/*
+objref slist
+slist=new SectionList()
+sec_23_24_dend_apical slist.append()
+sec_27_35_dend_apical slist.append()
+sec_35_45_dend_apical slist.append()
+sec_46_54_dend_apical slist.append()
+sec_54_56_dend_apical slist.append()
+sec_57_59_dend_apical slist.append()
+soma distance()
+
+k=0
+forsec "dend_apical" {
+	print secname(),"	", k, "		", distance(0.5)
+	k=k+1
+}
+
+
+forall insert epasn
+stim.amp=0
+stim.dur=0
+tstop=500
+
+forsec "axon_iseg" {
+	insert kext
+	insert epasn
+	insert kextna1
+}
+
+forsec "axon_iseg" {
+	insert kext
+	insert epasn
+	insert kextna1
+}
+
+axon_hill {
+	insert kext
+	insert epasn
+	insert kextna1
+}
+
+soma {
+	insert kext
+	insert epasn
+	insert kextna1
+}
+
+forsec "dend" {
+	insert kext
+	insert epasn
+	insert kextna1
+}
+
+*/
+
+proc para_save(){local k localobj file, pvec
+	pvec=new Vector(61)
+	file=new File()
+	
+	//Naf_i0
+	pvec.x[0]=vhalf_n_Naf_i0
+	pvec.x[1]=slope_n_Naf_i0
+	pvec.x[2]=tauA_n_Naf_i0
+	pvec.x[3]=tauG_n_Naf_i0
+
+	pvec.x[4]=vhalf_h_Naf_i0
+	pvec.x[5]=slope_h_Naf_i0
+	pvec.x[6]=tauA_h_Naf_i0
+	pvec.x[7]=tauG_h_Naf_i0
+
+	//Naf_i1
+	pvec.x[8]=vhalf_n_Naf_i1
+	pvec.x[9]=slope_n_Naf_i1
+	pvec.x[10]=tauA_n_Naf_i1
+	pvec.x[11]=tauG_n_Naf_i1
+
+	pvec.x[12]=vhalf_h_Naf_i1
+	pvec.x[13]=slope_h_Naf_i1
+	pvec.x[14]=tauA_h_Naf_i1
+	pvec.x[15]=tauG_h_Naf_i1
+
+	//KDR_i1
+	pvec.x[16]=vhalf_n_KDR_i1
+	pvec.x[17]=slope_n_KDR_i1
+	pvec.x[18]=tauA_n_KDR_i1
+	pvec.x[19]=tauG_n_KDR_i1
+
+	pvec.x[20]=vhalf_h_KDR_i1
+	pvec.x[21]=slope_h_KDR_i1
+	pvec.x[22]=tauA_h_KDR_i1
+	pvec.x[23]=tauG_h_KDR_i1
+
+	//KA_i1
+	pvec.x[24]=vhalf_n_KA_i1
+	pvec.x[25]=slope_n_KA_i1
+	pvec.x[26]=tauA_n_KA_i1
+	pvec.x[27]=tauG_n_KA_i1
+
+	pvec.x[28]=vhalfD_h_KA_i1
+	pvec.x[29]=slope_h_KA_i1
+	pvec.x[30]=tauA_h_KA_i1
+	pvec.x[31]=tauG_h_KA_i1
+
+	/*
+	//KDM
+	pvec.x[32]=vhalf_n_KDM_i1
+	pvec.x[33]=slope_n_KDM_i1
+	pvec.x[34]=tauA_n_KDM_i1
+	pvec.x[35]=tauG_n_KDM_i1
+
+	pvec.x[36]=vhalf_h_KDM_i1
+	pvec.x[37]=slope_h_KDM_i1
+	pvec.x[38]=tauA_h_KDM_i1
+	pvec.x[39]=tauG_h_KDM_i1
+	*/
+
+	pvec.x[32]=tauA_n_KS1
+	pvec.x[33]=tauA_n_KS2
+	pvec.x[34]=vhalf_n_KS1
+	pvec.x[35]=vhalf_n_KS2
+	pvec.x[36]=slope_n_KS1
+	pvec.x[37]=slope_n_KS2
+	
+	//Gbar
+	pvec.x[38]=Gbar_KS1
+	pvec.x[39]=Gbar_KS2
+
+	pvec.x[40]=Gbar_Naf
+	pvec.x[41]=s0_Gbar_Naf
+	pvec.x[42]=aXh_Gbar_Naf
+	pvec.x[43]=aXi0_Gbar_Naf
+	pvec.x[44]=aXi1_Gbar_Naf
+
+	pvec.x[45]=Gbar_KDR
+	pvec.x[46]=s0_Gbar_KDR
+	pvec.x[47]=aXh_Gbar_KDR
+	pvec.x[48]=aXi0_Gbar_KDR
+	pvec.x[49]=aXi1_Gbar_KDR
+	pvec.x[50]=Gbar_KA
+	pvec.x[51]=Gbar_KDM
+
+	/*
+	pvec.x[52]=syn[0].tot_num
+	pvec.x[53]=syn[0].num
+	pvec.x[54]=syn[0].ampar_tot
+	pvec.x[55]=syn[0].nmdar_tot
+	pvec.x[56]=syn[0].interval_s
+	pvec.x[57]=syn[0].interval_l
+
+	pvec.x[58]=axon_iseg[0].fhspace_kext
+	
+	pvec.x[59]=soma.depth_ca1ca
+	*/
+      	
+	pvec.x[52] = G_Rm
+	pvec.x[53] = G_Ra
+	pvec.x[54] = G_cm
+	pvec.x[55] = Gbar_h
+	//pvec.x[60]=G_ek
+  	
+        pvec.x[56] = syn[0].ampar_tot
+	pvec.x[57] = syn[0].nmdar_tot
+	
+
+	file.wopen($s1)
+	//pvec.fwrite(file
+	
+	for k=0,pvec.size()-1{
+		file.printf("%f\n", pvec.x[k])
+	}
+
+	file.close()
+	print "done file writing"	
+}
+
+proc para_read(){local k localobj pvec, file
+	pvec=new Vector(61)
+	file=new File()
+
+	file.ropen($s1)
+	for k=0, pvec.size()-1{
+		pvec.x[k]=file.scanvar()
+	}
+		
+	//Naf_i0
+	vhalf_n_Naf_i0=pvec.x[0]
+	slope_n_Naf_i0=pvec.x[1]
+	tauA_n_Naf_i0=pvec.x[2]
+	tauG_n_Naf_i0=pvec.x[3]
+
+	vhalf_h_Naf_i0=pvec.x[4]
+	slope_h_Naf_i0=pvec.x[5]
+	tauA_h_Naf_i0=pvec.x[6]
+	tauG_h_Naf_i0=pvec.x[7]
+
+	//Naf_i1
+	vhalf_n_Naf_i1=pvec.x[8]
+	slope_n_Naf_i1=pvec.x[9]
+	tauA_n_Naf_i1=pvec.x[10]
+	tauG_n_Naf_i1=pvec.x[11]
+
+	vhalf_h_Naf_i1=pvec.x[12]
+	slope_h_Naf_i1=pvec.x[13]
+	tauA_h_Naf_i1=pvec.x[14]
+	tauG_h_Naf_i1=pvec.x[15]
+
+	//KDR_i1
+	vhalf_n_KDR_i1=pvec.x[16]
+	slope_n_KDR_i1=pvec.x[17]
+	tauA_n_KDR_i1=pvec.x[18]
+	tauG_n_KDR_i1=pvec.x[19]
+
+	vhalf_h_KDR_i1=pvec.x[20]
+	slope_h_KDR_i1=pvec.x[21]
+	tauA_h_KDR_i1=pvec.x[22]
+	tauG_h_KDR_i1=pvec.x[23]
+
+	//KA_i1
+	vhalf_n_KA_i1=pvec.x[24]
+	slope_n_KA_i1=pvec.x[25]
+	tauA_n_KA_i1=pvec.x[26]
+	tauG_n_KA_i1=pvec.x[27]
+
+	vhalf_h_KA_i1=pvec.x[28]
+	slope_h_KA_i1=pvec.x[29]
+	tauA_h_KA_i1=pvec.x[30]
+	tauG_h_KA_i1=pvec.x[31]
+	
+	/*
+	//KDM
+	vhalf_n_KDM_i1=pvec.x[32]
+	slope_n_KDM_i1=pvec.x[33]
+	tauA_n_KDM_i1=pvec.x[34]
+	tauG_n_KDM_i1=pvec.x[35]
+
+	vhalf_h_KDM_i1=pvec.x[36]
+	slope_h_KDM_i1=pvec.x[37]
+	tauA_h_KDM_i1=pvec.x[38]
+	tauG_h_KDM_i1=pvec.x[39]
+	*/
+
+	tauA_n_KS1=pvec.x[32]
+	tauA_n_KS2=pvec.x[33]
+	vhalf_n_KS1=pvec.x[34]
+	vhalf_n_KS2=pvec.x[35]
+	slope_n_KS1=pvec.x[36]
+	slope_n_KS2=pvec.x[37]
+	
+	//Gbar
+	Gbar_KS1=pvec.x[38]
+	Gbar_KS2=pvec.x[39]
+
+	Gbar_Naf=pvec.x[40]
+	s0_Gbar_Naf=pvec.x[41]
+	aXh_Gbar_Naf=pvec.x[42]
+	aXi0_Gbar_Naf=pvec.x[43]
+	aXi1_Gbar_Naf=pvec.x[44]
+
+	Gbar_KDR=pvec.x[45]
+	s0_Gbar_KDR=pvec.x[46]
+	aXh_Gbar_KDR=pvec.x[47]
+	aXi0_Gbar_KDR=pvec.x[48]
+	aXi1_Gbar_KDR=pvec.x[49]
+	Gbar_KA=pvec.x[50]
+	Gbar_KDM=pvec.x[51]
+     
+	G_Rm = pvec.x[52]
+	G_Ra = pvec.x[53]
+	G_cm = pvec.x[54]
+	Gbar_h = pvec.x[55]
+
+	//G_ek=pvec.x[60]
+
+	
+	/*
+	forsec "dend_apical" fhspace_kext=pvec.x[58]
+	forsec "axon_iseg" fhspace_kext=pvec.x[58]
+	axon_hill.fhspace_kext=pvec.x[58]
+	
+	soma.depth_ca1ca=pvec.x[59]
+	soma.tau_ca1ca=pvec.x[60]
+
+	//syn_set_col4(num_tot, num, ampar_tot, nmdar_tot, interval_s, interval_l)
+	syn_set_col4(pvec.x[52], pvec.x[53], pvec.x[54], pvec.x[55], pvec.x[56], pvec.x[57])
+	print "num_tot:", pvec.x[52], "	num:", pvec.x[53], "	ampar_tot:", pvec.x[54], "	nmdar_tot:", pvec.x[55], "	interval_s:", pvec.x[56], "	interval_l:", pvec.x[57]			
+
+	*/
+	syn_set_col4(0,0, pvec.x[56], pvec.x[57],0,0)
+	file.close()
+}
+
+
+//para_read("para.txt")
+objref soma_cai, soma_ica, soma_v, inmdar_ca_syn[8], v_syn[8], timevec
+
+soma_cai=new Vector()
+soma_ica=new Vector()
+soma_v=new Vector()
+for k=0,7 {
+	inmdar_ca_syn[k]=new Vector()
+	v_syn[k]=new Vector()
+}
+timevec=new Vector()
+
+count=0
+forsec "soma" {count=count+1}
+objref soma_cainfl[count] 
+ 
+
+/*
+para_read("para.txt")
+syn_set_col4()
+data_record()
+chdir("  ")
+data_save()
+
+*/
+
+
+proc data_record(){local k
+	soma_cai.record(&soma.cai(0.5))
+	soma_ica.record(&soma.ica(0.5))
+	soma_v.record(&soma.v(0.5))
+	
+	k=0
+	forsec "soma" {
+		soma_cainfl[k]=new Vector()
+		soma_cainfl[k].record(&cai(0.5))
+		k=k+1
+	}	
+	
+
+	inmdar_ca_syn[0].record(&syn[3].inmdar_ca)
+	v_syn[0].record(&sph_y106_L169_T4_d14_R153_B154_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[1].record(&syn[23].inmdar_ca)
+	v_syn[1].record(&sph_y148_L390_T4_d4_R240_B241_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[2].record(&syn[41].inmdar_ca)
+	v_syn[2].record(&sph_y293_L487_T4_d20_R302_B303_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[3].record(&syn[44].inmdar_ca)
+	v_syn[3].record(&sph_y353_L550_T4_d20_R310_B311_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[4].record(&syn[79].inmdar_ca)
+	v_syn[4].record(&sph_y389_L618_T4_d4_R1761_B1762_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[5].record(&syn[150].inmdar_ca)
+	v_syn[5].record(&sph_y282_L567_T4_d4_R2065_B2066_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[6].record(&syn[158].inmdar_ca)
+	v_syn[6].record(&sph_y172_L335_T4_d4_R2092_B2093_Adend_apical.v(0.5))
+
+	inmdar_ca_syn[7].record(&syn[159].inmdar_ca)
+	v_syn[7].record(&sph_y138_L376_T4_d4_R2100_B2101_Adend_apical.v(0.5))
+
+	timevec.record(&t)
+}
+
+
+proc vecsave() {local k localobj vec, file
+	vec=$o1
+	file=new File()
+	file.wopen($s2)
+
+	file.printf("label: %s\n", $s2)
+	file.printf("%d\n", vec.size())
+	for k=0,vec.size()-1{
+		file.printf("%f\t %f\n", timevec.x[k], vec.x[k])
+	}
+	file.close()
+}
+
+strdef filename
+proc data_save(){
+	
+	vecsave(soma_cai, "soma_cai.dat")
+	vecsave(soma_ica, "soma_ica.dat")
+	vecsave(soma_v, "soma_v.dat")
+	
+	for k=0,7{
+		sprint(filename, "inmdar_ca_syn[%d].dat", k)
+		vecsave(inmdar_ca_syn[k], filename)
+	}
+	for k=0,7{
+		sprint(filename, "v_syn[%d].dat", k)
+		vecsave(v_syn[k], filename)
+	}
+}
+
+
+obfunc accu_ca(){local k localobj vec, vec_acc
+	vec=$o1
+	vec_acc=new Vector(vec.size())
+	vec_acc.x[0]=vec.x[0]
+	for k=1, vec.size()-1{
+ 		vec_acc.x[k]=vec.x[k]+vec_acc.x[k-1]
+	}
+	return vec_acc
+	
+}
+
+objref syn_list
+syn_list=new SectionList()
+//forsec "sph" { syn_list.append() }
+//PlotShape[0].color_list(syn_list,2)
+
+sph_y389_L618_T4_d4_R1761_B1762_Adend_apical { syn_list.append() }
+sph_y353_L550_T4_d20_R310_B311_Adend_apical { syn_list.append() }
+sph_y293_L487_T4_d20_R302_B303_Adend_apical { syn_list.append() }
+sph_y282_L567_T4_d4_R2065_B2066_Adend_apical { syn_list.append() }
+sph_y172_L335_T4_d4_R2092_B2093_Adend_apical { syn_list.append() }
+sph_y138_L376_T4_d4_R2100_B2101_Adend_apical { syn_list.append() }
+sph_y148_L390_T4_d4_R240_B241_Adend_apical   { syn_list.append() }
+sph_y106_L169_T4_d14_R153_B154_Adend_apical  { syn_list.append() }
+
+sec=0
+strdef secname1
+forsec"sph" {
+	secname1=secname()
+	forsec syn_list {
+		if(issection(secname1)){
+			print sec, secname()
+		}
+	}
+	sec=sec+1
+}

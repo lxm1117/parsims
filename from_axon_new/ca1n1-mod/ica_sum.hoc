@@ -1,0 +1,73 @@
+objref t_vec, g0, g1, soma_ica//, syn21_ica, 
+objref syn32_ica, syn42_ica, syn51_ica, syn53_ica, syn56_ica
+
+obfunc read_dat(){local k, vecsize localobj file, vec
+	file=new File()
+	file.ropen($s1)
+	vecsize=file.scanvar()
+	print vecsize
+	
+	vec=$o2
+
+	vec=new Vector(vecsize)
+	t_vec=new Vector(vecsize)
+
+	t_vec.x[0]=file.scanvar()
+	vec.x[0]=file.scanvar()
+	for k=1, vec.size()-1{
+		t_vec.x[k]=file.scanvar()
+		vec.x[k]=vec.x[k-1]+file.scanvar()
+	}
+	file.close()
+	return vec
+}
+
+proc plot_ica(){
+	strdef label,path
+	path=getcwd()
+	chdir($s1)
+	g0=$o3
+	g1=$o4
+
+	soma_ica=read_dat("soma_ica.dat", soma_ica, t_vec)
+	//syn21_ica=read_dat("inmdar_ca_syn21.dat", syn21_ica, t_vec)
+	syn32_ica=read_dat("inmdar_ca_syn32.dat", syn32_ica, t_vec)
+	syn42_ica=read_dat("inmdar_ca_syn42.dat", syn42_ica, t_vec)
+	syn51_ica=read_dat("inmdar_ca_syn51.dat", syn51_ica, t_vec)
+	syn53_ica=read_dat("inmdar_ca_syn53.dat", syn53_ica, t_vec)
+	syn56_ica=read_dat("inmdar_ca_syn56.dat", syn56_ica, t_vec)
+
+	sprint(label, "soma_ica_%s",$s2)
+	soma_ica.label(label)
+	soma_ica.plot(g0,t_vec,1,$5)
+	
+	/*
+	sprint(label, "syn21_ica_%s",$s2)
+	syn21_ica.label(label)
+	syn21_ica.plot(g1,t_vec,2,$5)
+	*/
+
+	sprint(label, "syn32_ica_%s",$s2)
+	syn32_ica.label(label)
+	syn32_ica.plot(g1,t_vec,3,$5)
+
+	sprint(label, "syn42_ica_%s",$s2)
+	syn42_ica.label(label)
+	syn42_ica.plot(g1,t_vec,4,$5)
+
+	sprint(label, "syn51_ica_%s",$s2)
+	syn51_ica.label(label)
+	syn51_ica.plot(g1,t_vec,5,$5)
+
+	sprint(label, "syn53_ica_%s",$s2)
+	syn53_ica.label(label)
+	syn53_ica.plot(g1,t_vec,6,$5)
+
+	sprint(label, "syn56_ica_%s",$s2)
+	syn56_ica.label(label)
+	syn56_ica.plot(g1,t_vec,7,$5)
+	chdir(path)
+	
+}
+	
+	
