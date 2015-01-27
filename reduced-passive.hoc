@@ -1,10 +1,12 @@
 // Initialize
 { 
   //  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  chdir("/home/neuro/from_axon/")
   load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
   load_file( "stdrun.hoc" )
   load_file( "eMorph-p.hoc" )
   load_file( "do_log.hoc" )
+  chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE")
 }
 objref RunEnv
 { 
@@ -18,8 +20,10 @@ objref RunEnv
       sprint( RunEnv.s3, "/axon/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/i686/.libs/libnrnmech.so", RunEnv.s1 )
     } else {
       if( ! strcmp( RunEnv.s2, "x86_64" ) ) {
-	sprint( RunEnv.s3, "/axon/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1 )
-      } else {
+	//sprint( RunEnv.s3, "/axon/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1 )
+        sprint( RunEnv.s3, "/home/neuro/from_axon/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1)
+	print RunEnv.s3
+	} else {
         printf( "\n\n\tUnknown architecture >>%s<<\n\n", RunEnv.s2 )
       }
     }
@@ -63,33 +67,30 @@ dfc_idebug = 0
 
 proc mulfit_cell_init() { 
   soma { distance() }	// set soma(0.5) as reference point
-  adj_e_pas = G_e_pas - G_e_pas_slope * tgt_bldiff
-  printf( "adj_e_pas %g G_e_pas %g G_e_pas_slope %g tgt_bldiff %g\n", adj_e_pas, G_e_pas, G_e_pas_slope, tgt_bldiff )
+  //adj_e_pas = G_e_pas - G_e_pas_slope * tgt_bldiff
+  //printf( "adj_e_pas %g G_e_pas %g G_e_pas_slope %g tgt_bldiff %g\n", adj_e_pas, G_e_pas, G_e_pas_slope, tgt_bldiff )
   forall {
     do_pas()
-    //do_Naf()      // does Naf and Nav16
+    do_Naf()      // does Naf and Nav16
     do_h()
-    //do_KDR()
-    //do_KA()
+    do_KDR()
+    do_KA()
   }
 
 
-/*
-  if( vdef( "RmCm_spine_gbar")) execute("eM.RmCm_spine_gbar = RmCm_spine_gbar")  // defaults to 0 in template
+
+//  if( vdef( "RmCm_spine_gbar")) execute("eM.RmCm_spine_gbar = RmCm_spine_gbar")  // defaults to 0 in template
   Spnum = 30000
   if( vdef( "Spine_number"))  Spnum = Spine_number
-  //eM.Spine_Comp_RmCm_f3d( "n420_af3d", Spnum )		// We perform Spine compensation after all else is set.
-  eM.use_morpho_xyz=1
-  eM.Spine_Comp_RmCm_n400_JAI(Spnum)
-*/
+  eM.Spine_Comp_RmCm_f3d( "n400_af3d", Spnum )		// We perform Spine compensation after all else is set.
+  //eM.use_morpho_xyz=1
+  //eM.Spine_Comp_RmCm_n400_JAI(Spnum)
 
   eM.idebug = 0						// show debug info only on first run
   set_nseg( lambda_f_d )
-  ifsec "axon_hill" {
-	axon_hill {
-		diam(0:1)=soma.diam(1):diam(0)
-	}
-  }
+	//axon_hill {
+	//	diam(0:1)=soma.diam(1):diam(0)
+	//}
 }
 
 //--------------------------------------------------------------------------------
@@ -108,34 +109,35 @@ proc set_nseg(){ local ns, lfd
 
 //--------------------------------------------------------------------------------
 proc do_pas(){
-  if( !ismembrane("pas") ) insert pas
-  e_pas	= adj_e_pas
-  g_pas	= 1 / ( G_Rm * 1000 )
+  if( !ismembrane("epasn") ) insert epasn
+  //e_pas	= adj_e_pas
+  g_epasn = 1 / ( G_Rm * 1000 )
   Ra	= G_Ra//*1000
   cm	= G_cm
+
   ifsec "soma" {
     if( vdef( "soma_l"))     L=soma_l
     if( vdef( "soma_diam"))  diam=soma_diam	
     if( vdef( "soma_cm" )) cm	= soma_cm
-    if( vdef( "soma_Rm" )) g_pas	= 1/ ( soma_Rm * 1000 )
+    if( vdef( "soma_Rm" )) g_epasn	= 1/ ( soma_Rm * 1000 )
     if( vdef( "soma_Ra" )) Ra	= soma_Ra//*1000
   }
   ifsec "axon" {		// aX_ => generic for all axons but Hillock
     if( vdef( "aX_cm" )) cm	= aX_cm
-    if( vdef( "aX_Rm" )) g_pas	= 1/ ( aX_Rm * 1000 )
+    if( vdef( "aX_Rm" )) g_epasn	= 1/ ( aX_Rm * 1000 )
     if( vdef( "aX_Ra" )) Ra	= aX_Ra//*1000
   }
   ifsec "axon_mnode" {		// aXm_ special for myelin can override generic
     if( vdef("aXm_cm"))	cm	= aXm_cm
-    if( vdef("aXm_Rm"))	g_pas	= 1/ ( aXm_Rm * 1000 )
+    if( vdef("aXm_Rm"))	g_epasn	= 1/ ( aXm_Rm * 1000 )
     if( vdef("aXm_Ra"))	Ra	= aXm_Ra//*1000
   }
   ifsec "axon_inode" {		// aXr_ special for nodes of Ranvier can override generic
     if( vdef("aXr_cm"))	cm	= aXr_cm
-    if( vdef("aXr_Rm"))	g_pas	= 1/ ( aXr_Rm * 1000 )
+    if( vdef("aXr_Rm"))	g_epasn	= 1/ ( aXr_Rm * 1000 )
     if( vdef("aXr_Ra"))	Ra	= aXr_Ra//*1000
   }
-  ifsec "axon_iseg[0]" {
+  ifsec "axon_iseg[0]" {	
 	//if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
 	L=30
 	diam=1
@@ -146,9 +148,10 @@ proc do_pas(){
 	diam=1
   }
   ifsec "axon_hill" {
-	//if(vdef("aX_hill_l")) L=aX_hill_l
-	L=5
-	diam(0:1)=3.5:1
+	if(vdef("axon_hill_l")){ 
+		L=axon_hill_l
+	}else{L=5}
+	diam(0:1)=2.8:1
   }
 }
 //--------------------------------------------------------------------------------
@@ -157,19 +160,24 @@ proc do_Naf(){
   if( vdef( "Gbar_Naf" )){
     if( !ismembrane("Naf_i0")) insert Naf_i0
 
-    ena = G_ena
+    nai0_na_ion = 10
+    nao0_na_ion = 145       
+    nai=nai0_na_ion
+    nao=nao0_na_ion
+    ena=nernst(nai0_na_ion, nao0_na_ion,1)
+
     gbar_Naf_i0 = Gbar_Naf	// default value unless overriden below
  
-    ifsec "soma" 	if(vdef("sO_Gbar_Naf"))		gbar_Naf_i0 	= s0_Gbar_Naf
+    ifsec "soma" 	if(vdef("s0_Gbar_Naf"))		gbar_Naf_i0 	= s0_Gbar_Naf
     ifsec "axon_hill" 	if(vdef("aXh_Gbar_Naf"))	gbar_Naf_i0 	= aXh_Gbar_Naf
     ifsec "axon_mnode" if(vdef("aXm_Gbar_Naf"))		gbar_Naf_i0 	= aXm_Gbar_Naf
     if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
 
     ifsec "axon_iseg" {
-	if(!ismembrane("Naf_i1")) {
+	//if(!ismembrane("Naf_i1")) {
 		insert Naf_i1
 		uninsert Naf_i0
-	}	
+	//}	
 	ifsec "axon_iseg[0]"  if( vdef("aXi0_Gbar_Naf"))		gbar_Naf_i1 	= aXi0_Gbar_Naf
 	ifsec "axon_iseg[1]"  if( vdef("aXi1_Gbar_Naf"))		gbar_Naf_i1 	= aXi1_Gbar_Naf
     }
@@ -177,43 +185,25 @@ proc do_Naf(){
   }
 }
 
-//--------------------------------------------------------------------------------
-/*
-proc do_Nap(){
-  if( vdef( "Gbar_Nap" )){
-    if( !ismembrane("Nap_i0") ) insert Nap_i0
-    ena = G_ena
-    gbar_Nap_i0 = Gbar_Nap
 
-    ifsec "axon_hill" 	if(vdef("aXh_Gbar_Nap"))		gbar_Nap_i1 	= aXh_Gbar_Nap
-    ifsec "axon_myelin" if(vdef("aXm_Gbar_Nap"))		gbar_Nap_i1 	= aXm_Gbar_Nap
-    if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
-
-    ifsec "axon" if( vdef("aX_Gbar_Nap"))			gbar_Nap_i1	= aX_Gbar_Nap
-    ifsec "axon_iseg" {	
-      if( vdef( "aXi_Gbar_Nap" )) 				gbar_Nap_i1 	= aXi_Gbar_Nap
-      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_Nap" )) 	gbar_Nap_i1 	= aXi0_Gbar_Nap
-      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_Nap" )) 	gbar_Nap_i1 	= aXi1_Gbar_Nap
-    }
-    ifsec "axon_node"       	if( vdef( "aXr_Gbar_Nap" )) 	gbar_Nap_i1 	= aXr_Gbar_Nap
-    ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_Nap" )) 	gbar_Nap_i1 	= aXm_Gbar_Nap
-  }
-}
-*/
 //--------------------------------------------------------------------------------
 proc do_KDR(){ local i
   if( vdef( "Gbar_KDR" )){
     if( !ismembrane("KDR_i1") ) insert KDR_i1
-    ek = G_ek
+    
+    ki0_k_ion=140
+    ko0_k_ion=2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek=nernst(ki0_k_ion, ko0_k_ion, 1) 
+
     gbar_KDR_i1 = Gbar_KDR
     if(vdef("Gbar_KDR_dslope") && !issection("axon.*")) 	gbar_KDR_i1 = Gbar_KDR *(1+Gbar_KDR_dslope*ydistP())
 
-    ifsec "soma" 	if(vdef("sO_Gbar_KDR"))			gbar_KDR_i1 	= sO_Gbar_KDR
-    ifsec "axon_hill" 	if(vdef("sO_Gbar_KDR"))			gbar_KDR_i1 	= sO_Gbar_KDR
+    ifsec "soma" 	if(vdef("s0_Gbar_KDR"))			gbar_KDR_i1 	= s0_Gbar_KDR
+    ifsec "axon_hill" 	if(vdef("s0_Gbar_KDR"))			gbar_KDR_i1 	= s0_Gbar_KDR
 
     ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDR"))		gbar_KDR_i1 	= aXh_Gbar_KDR
-    ifsec "axon_myelin" if(vdef("aXm_Gbar_KDR"))		gbar_KDR_i1 	= aXm_Gbar_KDR
-    if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
 
     ifsec "axon" if( vdef("aX_Gbar_KDR"))			gbar_KDR_i1	= aX_Gbar_KDR
     ifsec "axon_iseg" {	
@@ -225,56 +215,24 @@ proc do_KDR(){ local i
     ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_KDR" )) 	gbar_KDR_i1 	= aXm_Gbar_KDR
   }
 }
-//--------------------------------------------------------------------------------
-proc do_KDRa(){ 
-  if( vdef( "Gbar_KDRa" )){
-    if( !ismembrane("KDRa_i1") ) insert KDRa_i1
-    ek = G_ek
-    gbar_KDRa_i1 = Gbar_KDRa
 
-    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDRa"))		gbar_KDRa_i1 	= aXh_Gbar_KDRa
-    ifsec "axon_myelin" if(vdef("aXm_Gbar_KDRa"))		gbar_KDRa_i1 	= aXm_Gbar_KDRa
-    if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
 
-    ifsec "axon" if( vdef("aX_Gbar_KDRa"))			gbar_KDRa_i1	= aX_Gbar_KDRa
-    ifsec "axon_iseg" {	
-      if( vdef( "aXi_Gbar_KDRa" )) 				gbar_KDRa_i1 	= aXi_Gbar_KDRa
-      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXi0_Gbar_KDRa
-      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXi1_Gbar_KDRa
-    }
-    ifsec "axon_node"       	if( vdef( "aXr_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXr_Gbar_KDRa
-    ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_KDRa" )) 	gbar_KDRa_i1 	= aXm_Gbar_KDRa
-  }
-}
-//--------------------------------------------------------------------------------
-proc do_KDRb(){ 
-  if( vdef( "Gbar_KDRb" )){
-    if( !ismembrane("KDRb_i1") ) insert KDRb_i1
-    ek = G_ek
-    gbar_KDRb_i1 = Gbar_KDRb
 
-    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDRb"))		gbar_KDRb_i1 	= aXh_Gbar_KDRb
-    ifsec "axon_myelin" if(vdef("aXm_Gbar_KDRb"))		gbar_KDRb_i1 	= aXm_Gbar_KDRb
-    if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
-
-    ifsec "axon" if( vdef("aX_Gbar_KDRb"))			gbar_KDRb_i1	= aX_Gbar_KDRb
-    ifsec "axon_iseg" {	
-      if( vdef( "aXi_Gbar_KDRb" )) 				gbar_KDRb_i1 	= aXi_Gbar_KDRb
-      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXi0_Gbar_KDRb
-      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXi1_Gbar_KDRb
-    }
-    ifsec "axon_node"       	if( vdef( "aXr_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXr_Gbar_KDRb
-    ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_KDRb" )) 	gbar_KDRb_i1 	= aXm_Gbar_KDRb
-  }
-}
 //--------------------------------------------------------------------------------
 proc do_KA(){ local i
   if( vdef( "Gbar_KA" )){
     if( !ismembrane("KA_i1") ) insert KA_i1
-    ek = G_ek
+    
+    ki0_k_ion = 140
+    ko0_k_ion = 2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek = nernst(ki0_k_ion, ko0_k_ion, 1)
+
     gbar_KA_i1 = Gbar_KA
     if(vdef("Gbar_KA_dslope") && !issection("axon.*")) 		gbar_KA_i1 = Gbar_KA *(1+Gbar_KA_dslope*ydistP() )
-
+  
+    
     ifsec "axon_hill" 	if(vdef("aXh_Gbar_KA"))			gbar_KA_i1 	= aXh_Gbar_KA
     ifsec "axon_myelin" if(vdef("aXm_Gbar_KA"))			gbar_KA_i1 	= aXm_Gbar_KA
     if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
@@ -285,32 +243,12 @@ proc do_KA(){ local i
       ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KA" )) 	gbar_KA_i1 	= aXi0_Gbar_KA
       ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KA" )) 	gbar_KA_i1 	= aXi1_Gbar_KA
     }
-    ifsec "axon_node"       	if( vdef( "aXr_Gbar_KA" )) 	gbar_KA_i1 	= aXr_Gbar_KA
-    ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_KA" )) 	gbar_KA_i1 	= aXm_Gbar_KA
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KA" )) 	gbar_KA_i1 	= aXr_Gbar_KA
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KA" )) 	gbar_KA_i1 	= aXm_Gbar_KA
   }
 }
-//--------------------------------------------------------------------------------
-proc do_KAa(){ local i
-  if( vdef( "Gbar_KAa" )){
-    if( !ismembrane("KAa_i1") ) insert KAa_i1
-    ek = G_ek
-    gbar_KAa_i1 = Gbar_KAa
-    if(vdef("Gbar_KAa_dslope") && !issection("axon.*")) 	gbar_KAa_i1 = Gbar_KAa *(1+Gbar_KAa_dslope*ydistP() )
 
-    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KAa"))		gbar_KAa_i1 	= aXh_Gbar_KAa
-    ifsec "axon_myelin" if(vdef("aXm_Gbar_KAa"))		gbar_KAa_i1 	= aXm_Gbar_KAa
-    if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
 
-    ifsec "axon" if( vdef("aX_Gbar_KAa"))			gbar_KAa_i1	= aX_Gbar_KAa
-    ifsec "axon_iseg" {	
-      if( vdef( "aXi_Gbar_KAa" )) 				gbar_KAa_i1 	= aXi_Gbar_KAa
-      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KAa" )) 	gbar_KAa_i1 	= aXi0_Gbar_KAa
-      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KAa" )) 	gbar_KAa_i1 	= aXi1_Gbar_KAa
-    }
-    ifsec "axon_node"       	if( vdef( "aXr_Gbar_KAa" )) 	gbar_KAa_i1 	= aXr_Gbar_KAa
-    ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_KAa" )) 	gbar_KAa_i1 	= aXm_Gbar_KAa
-  }
-}
 //--------------------------------------------------------------------------------
 proc do_h(){ local i
   if( vdef( "Gbar_h" )){
@@ -342,19 +280,19 @@ proc init() {   local v0, v1
   if( init_first ){
     init_first = 0
     // calculate G_e_pas_slope to adjust e_pas for each trace's baseline
-    G_e_pas_slope = 0
-    G_e_pas += 1
+    //G_e_pas_slope = 0
+    //G_e_pas += 1
     mulfit_cell_init()
     iss.init_steady_state	// init_steady_state()
     if( check_iss_unstable()) return
     v1 = v
-    G_e_pas -= 1
+    //G_e_pas -= 1
     mulfit_cell_init()
     iss.init_steady_state	// init_steady_state()
     if( check_iss_unstable()) return
     v0 = v
-    G_e_pas_slope = 1/(v1-v0)
-    printf( "init: G_e_pas_slope %g\n", G_e_pas_slope )
+    //G_e_pas_slope = 1/(v1-v0)
+    //printf( "init: G_e_pas_slope %g\n", G_e_pas_slope )
     
   }
   mulfit_cell_init()
@@ -384,16 +322,13 @@ objref stim
 proc do_cell(){
   
   forall delete_section()
-  chdir("/axon/d1/Users/ximing/cNeuro/MCells/Reduced")
+  chdir("/home/neuro/from_axon/n400td")
   load_file( 1, $s1 )	// load cell
   if( numarg()>1 ) load_file( 1, $s2 )	// load axon
   soma {
     stim	= new IClamp(0.5)
-    stim.del 	= 20
-    stim.dur 	= 80
-    stim.amp 	= 0.8
   }
-  chdir("/axon/d1/Users/ximing/Projects/ParSims/pDE")
+  chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE")
 }
 
 //================================================================================

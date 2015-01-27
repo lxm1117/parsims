@@ -1,0 +1,732 @@
+/* ================================================================================
+  Morphology related routines.
+
+  Add spines to a cell
+    1. by including a subsample of explicit spines
+    2. by corrections using Rm and Cm.
+
+  PARAMETERS
+    .sample_pct	Percent of explicit spines to create
+    .g_type	String array with dendritic label names for Gulyas cells
+    .g_den	Array of densities for each dendritic type (#/um)
+
+    .type_pct	Array of spine type densities for stub[0], mush[1] and thin[2] spines.
+    .head_dia	Array of head diameters 
+    .head_len	Array of head lengths
+    .neck_dia	Array of neck diameters
+    .neck_len	Array of neck lengths
+
+  USAGE
+    load_file( "eMorph-template.hoc" )
+    .. // create soma and segments. 
+    strdef	cell_id
+    cell_id	= "your-cell-identifier"
+
+
+  ================================================================================ */
+
+//--- Allow loading before cell
+if( ! name_declared( "soma" )){
+  execute( "create soma" )
+}
+if( ! name_declared( "randSel" ) ){
+  execute("objref randSel" )
+  execute( "randSel = new Random(123)")
+}
+
+begintemplate String_array_aux_
+  public s
+  strdef s
+endtemplate String_array_aux_
+
+begintemplate String_array
+
+  objref	s[1], strf
+  public	s, n, set_size, split
+
+  proc init() { local i
+    n = $1
+    if( n > 0 ){
+      objref	s[ n ]
+      for i=1, n s[i-1] = new String_array_aux_()
+    }
+  }
+
+endtemplate String_array
+
+//==========================================================================================
+begintemplate eMorph
+
+  double 	type_pct[3], neck_dia[3], neck_len[3], head_dia[3], head_len[3], spine_area[3], type_added[3]
+  double	g_den[9], dend_len[9], g_dend_len[9]
+  public	RmCm_spine_gbar
+
+  strdef	cmd_str
+  objref	g_type, vSel, sec_list, this
+
+  public	Add_spines_RmCm, append, spine_avgs, idebug
+  public	Spine_Comp_RmCm_n400_BH, Spine_Comp_RmCm_n400
+  public 	Spine_Comp_RmCm_n400_JAI, sec_type_assignG_n400
+  public	type_pct, neck_dia, neck_len, head_dia, head_len, type_added
+  
+  public 	use_morpho_xyz
+  external	randSel
+
+  //--------------------------------------------------------------------------------
+  proc init() {
+    
+    todo_n400_types	= 1
+    idebug 		= 0
+    sample_pct		= 0.002
+    use_morpho_xyz	= 0	// Flag to signal use of morpho coords instead of nrn's x3d, y3d, z3d coords
+    RmCm_spine_gbar	= 0	// how to set spine_gbars flag 0=>gbar_spines=0; 1=>gbar_spines=gbar_dends
+
+    g_nType		= 9				//-- Gulyas labeled cells
+    g_type 		= new String_array( g_nType )
+    g_type.s[0].s	= "so_distal"
+    g_type.s[1].s	= "so_proximal"
+    g_type.s[2].s	= "sr_proximal"
+    g_type.s[3].s	= "sr_medial"
+    g_type.s[4].s	= "sr_distal"
+    g_type.s[5].s	= "sr_thin"
+    g_type.s[6].s	= "slm_thick"
+    g_type.s[7].s	= "slm_medium"
+    g_type.s[8].s	= "slm_thin"
+    
+    double		g_den[g_nType]
+    g_den[0]		= 3.08				//-- Gulyas densities (#/um) per dend type
+    g_den[1]		= 0.64
+    g_den[2]		= 0.03
+    g_den[3]		= 2.37
+    g_den[4]		= 6.98
+    g_den[5]		= 3.52
+    g_den[6]		= 1.72
+    g_den[7]		= 0.60
+    g_den[8]		= 0.37
+
+    double		g_dend_len[g_nType], dend_len[g_nType]
+    g_dend_len[0]	= 33.0				//-- Gulyas per dend type as percent of total lenght
+    g_dend_len[1]	= 3.3
+    g_dend_len[2]	= 1.0
+    g_dend_len[3]	= 1.0
+    g_dend_len[4]	= 2.7
+    g_dend_len[5]	= 35.5
+    g_dend_len[6]	= 2.5
+    g_dend_len[7]	= 5.3
+    g_dend_len[8]	= 15.7
+
+    spine_nType		= 3				//-- Spine types
+    double		type_pct[spine_nType], spine_area[spine_nType], type_added[spine_nType]
+    double		head_dia[spine_nType], head_len[spine_nType], neck_dia[spine_nType], neck_len[spine_nType]
+    
+    // Based on data from Harris JNS 1992
+    //------ Stub spines 
+    type_pct[0] 	= 0.07
+    neck_dia[0]		= 0.27
+    neck_len[0]		= 0.54/2
+    head_dia[0]		= 0.27
+    head_len[0]		= 0.54/2
+
+    //------ Mush spines 
+    type_pct[1] 	= 0.25
+    neck_dia[1]		= 0.32
+    neck_len[1]		= 0.25
+    head_dia[1]		= 0.45
+    head_len[1]		= 1.70
+
+    //------ Thin spines 
+    type_pct[2] 	= 0.68
+    neck_dia[2]		= 0.19
+    neck_len[2]		= 0.35
+    head_dia[2]		= 0.30
+    head_len[2]		= 0.42
+    
+  }
+  
+  //================================================================================
+  public comp_section_gbars
+  proc comp_section_gbars(){ local i, cF localobj mt, mL, sf, str
+    cF = $1
+    mL = new List()
+    sf = new StringFunctions()
+    
+    mt = new MechanismType(0)
+    for i=0, mt.count-1 {
+      mt.select( i )
+      str = new str_obj()
+      mt.selected( str.s1 )
+      if( sf.substr( str.s1, "_ion" ) >=0 ) continue
+      if( sf.substr( str.s1, "morphology" ) >=0 ) continue
+      if( sf.substr( str.s1, "pas" ) >=0 ) continue
+      if( sf.substr( str.s1, "capacitance" ) >=0 ) continue
+      if( ismembrane(  str.s1 )) {
+	mL.append( str )
+	if( idebug > 5 ) print str.s1 
+      }
+    }
+    str = new str_obj()
+    for i=0, mL.count-1 {
+      execute( str.sPrint( "gbar_%s *= %g", mL.o(i).s1, cF ).s1 )
+    }
+  }
+
+  //================================================================================
+  // Perform spine compensation using 3d type assignment function
+  public Spine_Comp_RmCm_f3d, type
+  strdef f3d, buf  // 3d type assign function
+  proc Spine_Comp_RmCm_f3d() { local i, comp_Fac, comp_gbar, dend_type, area_sec, area_spine
+    f3d = $s1
+    desired_nspn = 30000
+    if( numarg() > 1 ) desired_nspn = $2
+
+    for i=0, g_nType-1 dend_len[i] = 0
+    area_tot 	= 0
+    nspn_tot	= 0
+    area_spn_tot = 0
+    spine_avgs()
+    distance( 0, 0.5 )
+    
+    //    forsec "dend" {
+    sec_list = new SectionList()
+    sprint( cmd_str, "forsec \"dend\" %s.append()", this )
+    execute( cmd_str )
+    
+    len_tot	= 0
+    vol_tot	= 0
+    nspn 	= 0
+    type 	= 0
+    forsec sec_list {
+      //      sprint( buf, "type = %s( %g, %g, %g )", f3d, x3d(0.5), y3d(0.5), z3d(0.5) )
+      sprint( buf, "%s.type = %s.%s( )", this, this, f3d )
+      execute( buf )
+      len_tot += L
+      vol_tot += PI / 4 * diam^2 * L
+      nspn += L * g_den[type]
+    }
+    len_adj_factor = desired_nspn / nspn
+    
+    forsec sec_list {
+      area_sec	= area_section()
+      L_adj	= L * len_adj_factor
+      execute( buf )
+      nspn	= L_adj * g_den[type]
+      area_spine =  nspn * spine_area_avg_wgt
+      comp_Fac = 1 + area_spine / area_sec
+      cm	= comp_Fac * cm
+      //g_pas 	= comp_Fac * g_pas
+      g_epasn	= comp_Fac * g_epasn
+
+      comp_gbar = (area_spine + area_sec )/ area_sec
+      if( RmCm_spine_gbar ) comp_section_gbars( comp_gbar )
+
+      if( idebug > 5) printf( "name %s diam %g type %g area_sec %g dend_type %g area_spine %g comp_Fac %g\n", \
+                             secname(), diam, type, area_sec, dend_type, area_spine, comp_Fac )
+      dend_len[type] += L
+      area_tot 	+= area_sec
+      nspn_tot  += nspn
+      area_spn_tot  += area_spine
+    }
+
+    if( idebug ){
+      printf( "Spine_Comp_RmCm_morpho: len_tot %g area_tot %g vol_tot %g\n", len_tot, area_tot, vol_tot )
+      printf( "Spine_Comp_RmCm_morpho: len_adj_factor %g area_spn_tot %g nspn_tot %g\n", \
+		   len_adj_factor, area_spn_tot, nspn_tot )
+      for i=0, g_nType-1 printf( "%20s %8.0f um %3.0f pct Gulyas %3.0f\n", \
+  			g_type.s[i].s, dend_len[i], dend_len[i]/len_tot*100, g_dend_len[i] )
+    }
+    if( idebug > 5) printf( "exiting Spines_Comp_RmCm_morpho\n" )
+  }
+  
+  //--------------------------------------------------------------------------------
+  // return the type of the currently accessed section using section name coupled to 3d location
+  public n400_af3d
+  func n400_af3d(){ local dist, ydist, pdist
+    //dist = distance( 1 )
+    //ydist = abs( y3d(0.5) )
+    //pdist = sqrt( x3d(0.5)^2 + z3d(0.5)^2 )
+    
+    sec_type = 2						// default 
+    
+    ifsec "axon" sec_type = -2				// axon
+    ifsec "soma" sec_type = -1				// soma
+    ifsec "seg" { 
+	ifsec "dend"{
+		dist=distance(1)
+		ydist=abs(y3d(0.5))
+		pdist=sqrt(x3d(0.5)^2+z3d(0.5)^2)
+    		ifsec "dend_basal" {
+      			if( dist > 30 ) { sec_type = 0 }			// so_distal
+        		if( dist <= 30 ) { sec_type = 1 } 			// so_proximal
+  	 	} 
+    		ifsec "dend_apical" {
+
+               		if( ydist < 50 && pdist <= 45 ) sec_type = 2			// sr_proximal
+     			if( ydist >= 50 && ydist < 200 && pdist <= 45 ) sec_type = 3	// sr_medial
+      			if( ydist >= 200 && ydist < 520 && pdist <= 45 ) sec_type = 4	// sr_distal
+      			if( ydist < 520 && 		   pdist > 45 ) sec_type = 5	// sr_thin
+      			if( ydist >= 520 && 		   pdist < 75 ) sec_type = 6	// slm_thick
+      			if( ydist >= 520 && 		   pdist >=75 && pdist < 125 ) sec_type = 7	// slm_medium
+      			if( ydist >= 520 && 		   pdist >= 125 ) sec_type = 8			// slm_thin
+    		}
+    	}
+    }	
+    if( idebug > 5 ) printf( "af3d returning %g\n", sec_type )
+    return sec_type
+  }
+  //--------------------------------------------------------------------------------
+  // return the type of the currently accessed section using section name coupled to 3d location
+  public n420_af3d
+  func n420_af3d(){ local dist, ydist, pdist, so_pd_cut, sr_slm_cut
+    dist = distance( 1 )
+    ydist = abs( y3d(0.5) )
+    pdist = sqrt( x3d(0.5)^2 + z3d(0.5)^2 )
+    
+    sec_type = 2						// default 
+    
+    ifsec "axon" sec_type = -2				// axon
+    ifsec "soma" sec_type = -1				// soma
+    
+    so_pd_cut = 150
+    ifsec "dend_basal" {
+      if( dist >  so_pd_cut ) { sec_type = 0 }			// so_distal
+      if( dist <= so_pd_cut ) { sec_type = 1 } 			// so_proximal
+    } 
+    sr_slm_cut = 460
+    sr_pm_cut = 50
+    sr_md_cut = 75
+    sr_pmd_t_cut = 28
+    
+    slm_tm_cut = 25
+    slm_mt_cut = 71
+    ifsec "dend_apical" {
+      if( ydist <  sr_pm_cut &&				pdist <= sr_pmd_t_cut ) sec_type = 2	// sr_proximal
+      if( ydist >= sr_pm_cut &&  ydist < sr_md_cut && 	pdist <= sr_pmd_t_cut ) sec_type = 3	// sr_medial
+      if( ydist >= sr_md_cut &&  ydist < sr_slm_cut &&	pdist <= sr_pmd_t_cut ) sec_type = 4	// sr_distal
+      if( ydist < sr_slm_cut && 		   	pdist >  sr_pmd_t_cut ) sec_type = 5	// sr_thin
+
+      if( ydist >= sr_slm_cut && pdist <  slm_tm_cut ) 				sec_type = 6	// slm_thick
+      if( ydist >= sr_slm_cut && pdist >= slm_tm_cut && pdist < slm_mt_cut ) 	sec_type = 7	// slm_medium
+      if( ydist >= sr_slm_cut && pdist >= slm_mt_cut ) 				sec_type = 8	// slm_thin
+    }
+    if( idebug > 5 ) printf( "af3d returning %g\n", sec_type )
+    return sec_type
+  }
+  //================================================================================
+  // Perform spine compensation using inserted morpho
+  public Spine_Comp_RmCm_morpho
+  proc Spine_Comp_RmCm_morpho() { local i, comp_Fac, dend_type, area_sec, area_spine
+    desired_nspn = 30000
+    if( numarg() > 0 ) desired_nspn = $1
+    
+    for i=0, g_nType-1 dend_len[i] = 0
+    area_tot 	= 0
+    nspn_tot	= 0
+    area_spn_tot = 0
+    spine_avgs()
+    distance( 0, 0.5 )
+    
+    //    forsec "dend" {
+    sec_list = new SectionList()
+    sprint( cmd_str, "forsec \"dend\" %s.append()", this )
+    execute( cmd_str )
+    
+    len_tot	= 0
+    vol_tot	= 0
+    nspn 	= 0
+    forsec sec_list {
+      len_tot += L
+      vol_tot += PI / 4 * diam^2 * L
+      nspn += L * g_den[type_morpho]
+    }
+    len_adj_factor = desired_nspn / nspn
+    
+    forsec sec_list {
+      area_sec	= area_section()
+      L_adj	= L * len_adj_factor
+      nspn	= L_adj * g_den[type_morpho]
+      area_spine =  nspn * spine_area_avg_wgt
+      comp_Fac = 1 + area_spine / area_sec
+      cm	= comp_Fac * cm
+      g_pas 	= comp_Fac * g_pas
+      
+        
+      //ismembrane("Naf2_i1") {gbar_Naf2_i1=gbar_Naf2_i1*comp_Fac  }
+      ismembrane("h_i0") { gbar_h_i0=gbar_h_i0*comp_Fac   }
+      ismembrane("KDR_i1")  { gbar_KDR_i1=gbar_KDR_i1*comp_Fac     }
+      ismembrane("KA_i1") { gbar_KA_i1=gbar_KA_i1*comp_Fac       }
+       
+      
+      if( idebug > 5) printf( "name %s diam %g area_sec %g dend_type %g area_spine %g comp_Fac %g\n", \
+                             secname(), diam, area_sec, dend_type, area_spine, comp_Fac )
+      dend_len[type_morpho] += L
+      area_tot 	+= area_sec
+      nspn_tot  += nspn
+      area_spn_tot  += area_spine
+    }
+
+    if( idebug ){
+      printf( "Spine_Comp_RmCm_morpho: len_tot %g area_tot %g vol_tot %g\n", len_tot, area_tot, vol_tot )
+      printf( "Spine_Comp_RmCm_morpho: len_adj_factor %g area_spn_tot %g nspn_tot %g\n", \
+		   len_adj_factor, area_spn_tot, nspn_tot )
+      for i=0, g_nType-1 printf( "%20s %8.0f um %3.0f pct Gulyas %3.0f\n", \
+  			g_type.s[i].s, dend_len[i], dend_len[i]/len_tot*100, g_dend_len[i] )
+    }
+    if( idebug > 5) printf( "exiting Spines_Comp_RmCm_morpho\n" )
+  }
+  
+  //================================================================================
+  // assign type numbers consistent with Gulyas' code
+  //   Added -1 for soma
+  proc sec_type_assignG_n400() { local sec_type, dist, diam_factor, adj_diam
+    
+    sec_list = new SectionList()
+    sprint( cmd_str, "forall %s.append()", this )
+    execute( cmd_str )
+    
+    forsec sec_list ifsec "soma" distance()
+
+    forsec sec_list {
+        if( ! ismembrane( "morpho" )){
+		continue_dialog("eMorph.sec_type_assignG_n400: requires insert morpho" )
+		break
+      	}
+
+      ifsec "dend"{
+     	 if( use_morpho_xyz ){ // use morpho coordinates
+		xdist = abs( 0.5*(x0_morpho + x1_morpho) )
+		ydist = abs( 0.5*(y0_morpho + y1_morpho) )
+		zdist = abs( 0.5*(z0_morpho + z1_morpho) )
+		pdist = sqrt( xdist^2 + xdist^2 )
+		dist = sqrt( xdist^2 + ydist^2 + zdist^2 )
+      	}else{
+		dist = distance( 1 )
+		ydist = abs( y3d(1) )
+		pdist = sqrt( x3d(1)^2 + z3d(1)^2 )
+      	}
+      }	
+    
+      sec_type = 2						// default 
+
+      ifsec "soma" sec_type = -1				// soma
+
+      ifsec "dend_basal" {
+	if( dist > 60 ) { sec_type = 0 }			// so_distal
+	if( dist <= 60 ) { sec_type = 1 } 			// so_proximal
+      } 
+      ifsec "dend_apical" {
+	if( ydist < 125 && pdist <= 45 ) sec_type = 2
+	if( ydist >= 125 && ydist < 250 && pdist <= 45 ) sec_type = 3
+	if( ydist >= 250 && ydist < 400 && pdist <= 45 ) sec_type = 4
+	if( ydist < 400 && pdist > 45 ) sec_type = 5
+	if( ydist >= 400 && pdist < 75 ) sec_type = 6
+	if( ydist >= 400 && pdist >=75 && pdist < 150 ) sec_type = 7
+	if( ydist >= 400 && pdist >= 150 ) sec_type = 8
+	
+	
+	//      diam_factor = 1
+	//      adj_diam = diam / diam_factor
+	//if( dist < 100 ) sec_type = 2		       		// sr_proximal
+	//if( dist >= 100 && dist < 500 ) sec_type = 3          	// sr_medial
+	//if( dist >= 500 && dist < 850 ) sec_type = 4          	// sr_distal
+	//if( dist < 850 && adj_diam < 0.6 ) sec_type = 5		// sr_thin (obliques)
+	//if( dist >= 850 ) {
+	//  if( adj_diam > 0.6 ) sec_type = 6			// slm_thick
+	//  if( adj_diam > 0.4 && adj_diam <= 0.6 ) sec_type = 7	// slm_medium
+	//  if( adj_diam <= 0.4 ) sec_type = 8			// slm_thin
+	// }
+      }
+      //      spf = g_den[ sec_type ] * sp_adj
+      //      comp_Fac	= ( area_sec + spf*L*ave_sp_area )/area_sec
+      //      comp_Fac = RmCm_spine_factor( 0, g_den[sec_type], diam, L )
+      type_morpho = sec_type
+    }
+  }
+  
+  //================================================================================
+  // assign type numbers consistent with Gulyas' code
+  //   Added -1 for soma and -2 for axon
+  // Fine tuned to match Gulyas stats
+  proc sec_type_assignG_n400_2() { local sec_type, dist, diam_factor, adj_diam
+    
+    sec_list = new SectionList()
+    sprint( cmd_str, "forall %s.append()", this )
+    execute( cmd_str )
+    
+    forsec sec_list ifsec "soma" distance()
+
+    forsec sec_list {
+      if( ! ismembrane( "morpho" )){
+	continue_dialog("eMorph.sec_type_assignG_n400: requires insert morpho" )
+	break
+      }
+      
+      if( use_morpho_xyz ){ // use morpho coordinates
+	xdist = abs( 0.5*(x0_morpho + x1_morpho) )
+	ydist = abs( 0.5*(y0_morpho + y1_morpho) )
+	zdist = abs( 0.5*(z0_morpho + z1_morpho) )
+	pdist = sqrt( xdist^2 + zdist^2 )
+	dist = sqrt( xdist^2 + ydist^2 + zdist^2 )
+      }else{
+	dist = distance( 1 )
+	ydist = abs( y3d(1) )
+	pdist = sqrt( x3d(1)^2 + z3d(1)^2 )
+      }
+    
+      sec_type = 2						// default 
+
+      ifsec "axon" sec_type = -2				// axon
+      ifsec "soma" sec_type = -1				// soma
+
+      ifsec "dend_basal" {
+	if( dist > 30 ) { sec_type = 0 }			// so_distal
+	if( dist <= 30 ) { sec_type = 1 } 			// so_proximal
+      } 
+      ifsec "dend_apical" {
+	if( ydist < 50 && pdist <= 45 ) sec_type = 2			// sr_proximal
+	if( ydist >= 50 && ydist < 200 && pdist <= 45 ) sec_type = 3	// sr_medial
+	if( ydist >= 200 && ydist < 520 && pdist <= 45 ) sec_type = 4	// sr_distal
+	if( ydist < 520 && 		   pdist > 45 ) sec_type = 5	// sr_thin
+	if( ydist >= 520 && 		   pdist < 75 ) sec_type = 6	// slm_thick
+	if( ydist >= 520 && 		   pdist >=75 && pdist < 125 ) sec_type = 7	// slm_medium
+	if( ydist >= 520 && 		   pdist >= 125 ) sec_type = 8			// slm_thin
+	
+      }
+      type_morpho = sec_type
+    }
+  }
+  
+  //================================================================================
+  // Perform spine compensation on cell n400
+  //  Spine_Comp_RmCm_n400_BH( len_adj_factor ) 
+  public todo_n400_types
+  proc Spine_Comp_RmCm_n400_JAI() { local i, comp_Fac, dend_type, area_sec, area_spine
+    if( todo_n400_types == 1 ) sec_type_assignG_n400()
+    if( todo_n400_types == 2 ) sec_type_assignG_n400_2()
+    todo_n400_types = 0
+    Spine_Comp_RmCm_morpho( $1 )
+  }
+
+  //================================================================================
+  // Perform spine compensation on cell n400
+  //  Spine_Comp_RmCm_n400_BH( len_adj_factor ) 
+  proc Spine_Comp_RmCm_n400_BH() { local i, comp_Fac, dend_type, area_sec, area_spine
+    
+    if( numarg() > 0 ) len_adj_factor = $1
+
+    if( idebug > 5) printf( "entering Spines_Comp_RmCm_n400_BH\n" )
+    for i=0, g_nType-1 dend_len[i] = 0
+    area_tot 	= 0
+    nspn_tot	= 0
+    area_spn_tot = 0
+    diam_factor	= 1
+    spine_avgs()
+    distance( 0, 0.5 )
+    
+    //    forsec "dend" {
+    sec_list = new SectionList()
+    sprint( cmd_str, "forsec \"dend\" %s.append()", this )
+    execute( cmd_str )
+    
+    len_tot	= 0
+    forsec sec_list len_tot += L
+    if( numarg() <= 0 ) len_adj_factor = 11479/len_tot	// normalize cell's length to Gulyas avg length
+    
+    forsec sec_list {
+      dend_type = 2						// default 
+      dist = distance( 1 )
+      adj_diam = diam / diam_factor
+      
+      ifsec "dend_basal" {
+	if (adj_diam < 0.5 ) { dend_type = 0 }			// so_distal
+	if (adj_diam >= 0.5) { dend_type = 1 } 			// so_proximal
+      } 
+      ifsec "dend_apical" {
+	if( dist < 100 ) dend_type = 2		       		// sr_proximal
+	if( dist >= 100 && dist < 500 ) dend_type = 3          	// sr_medial
+	if( dist >= 500 && dist < 850 ) dend_type = 4          	// sr_distal
+	if( dist < 850 && adj_diam < 0.6 ) dend_type = 5	// sr_thin (obliques)
+	if( dist >= 850 ) {
+	  if( adj_diam > 0.6 ) dend_type = 6			// slm_thick
+	  if( adj_diam > 0.4 && adj_diam <= 0.6 ) dend_type = 7	// slm_medium
+	  if( adj_diam <= 0.4 ) dend_type = 8			// slm_thin
+	}
+      }
+      //      spf = g_den[ dend_type ] * sp_adj
+      //      comp_Fac	= ( area_sec + spf*L*ave_sp_area )/area_sec
+      //      comp_Fac = RmCm_spine_factor( 0, g_den[dend_type], diam, L )
+      area_sec	= area_section()
+      L_adj	= L * len_adj_factor
+      nspn	= L_adj * g_den[dend_type]
+      area_spine =  nspn * spine_area_avg_wgt
+      comp_Fac = 1 + area_spine / area_sec
+      cm	= comp_Fac * cm
+      g_pas 	= comp_Fac * g_pas
+      
+      if( idebug > 5) printf( "name %s diam %g area_sec %g dend_type %g area_spine %g comp_Fac %g\n", \
+                             secname(), diam, area_sec, dend_type, area_spine, comp_Fac )
+      dend_len[dend_type] += L
+      area_tot 	+= area_sec
+      nspn_tot  += nspn
+      area_spn_tot  += area_spine
+    }
+    
+    forall { nseg = int((L/(0.1*lambda_f(100))+.9)/2)*2 + 1 }
+    
+    if( idebug ){
+      printf( "Spine_Comp_RmCm_n400_BH: len_adj_factor %g area_tot %g area_spn_tot %g nspn_tot %g\n", \
+		  len_adj_factor, area_tot, area_spn_tot, nspn_tot )
+      printf( "len_tot %.0f\n", len_tot )
+      for i=0, g_nType-1 printf( "%20s %8.0f um %3.0f pct Gulyas %3.0f\n", \
+  			g_type.s[i].s, dend_len[i], dend_len[i]/len_tot*100, g_dend_len[i] )
+    }
+    if( idebug > 5) printf( "exiting Spines_Comp_RmCm_n400_BH\n" )
+  }
+  
+  //================================================================================
+  // Return the total area of the currently accessed section
+  func area_section() { local a, x
+    a = 0
+    for (x) { a += area(x) }  
+    return a
+  }
+
+  //--------------------------------------------------------------------------------
+  func SpineTypeSelect() { local rStp, iStp
+    rStp = randSel.uniform( 0, type_pct_sum )
+    iStp = 0
+    while( rStp > type_pct[ iStp ] ){
+      rStp -= type_pct[ iStp ]
+      iStp += 1
+    }
+    return iStp
+  }
+
+  //--------------------------------------------------------------------------------
+  proc append() {
+    sec_list.append()
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc spine_avgs() { local iT
+    type_pct_sum 	= 0
+    spine_area_avg_wgt 	= 0
+    for( iT=0; iT < spine_nType; iT+=1 ) {
+      type_added[ iT]		= 0
+      type_pct_sum 		+= type_pct[iT]
+      spine_area[iT] 		= PI * neck_dia[iT] * neck_len[iT] + PI * head_dia[iT] * head_len[iT]
+      spine_area_avg_wgt 	+= type_pct[iT] * spine_area[iT]
+    }    
+    if( idebug ) print "spine_area_avg_wgt ", spine_area_avg_wgt
+  }
+
+  //--------------------------------------------------------------------------------
+  proc Add_spines_RmCm() { local iT, igT, len_sum, nSpine, iS, nNew, iNew, AddedArea
+    
+    spine_avgs()
+
+    for( igT = 0; igT < g_nType; igT+=1 ){
+ 
+      sec_list = new SectionList()
+      sprint( cmd_str, "forsec \"%s\" %s.append()", g_type.s[ igT ].s, this )
+      execute( cmd_str )
+
+      len_sum = 0
+      forsec sec_list {
+        len_sum += L
+      }
+      nSpine = int( sample_pct * len_sum * g_den[ igT ] + 0.5 )
+
+      randSel.uniform( 0, len_sum )
+      vSel = new Vector( nSpine )
+      vSel.setrand( randSel )
+      vSel.sort()
+
+      len_curr = 0
+      iS = 0
+      forsec sec_list {
+        if( iS >= nSpine ) break
+        len_curr += L
+        nNew = 0
+        while( len_curr >= vSel.x[ iS+nNew ] ){
+          nNew += 1
+	  if( iS+nNew >= nSpine ) break
+        }
+	AddedArea = 0
+        for( iNew=0; iNew < nNew; iNew+=1 ){
+	  AddedArea +=  AddSpine( iNew, nNew )
+	  iS += 1
+        }
+	Adjust_RmCm_section( AddedArea, g_den[igT] )
+      }
+    }
+  } //--- Add_spines_RmCm()
+  
+  //--------------------------------------------------------------------------------
+  // return factor to correct section
+  func RmCm_spine_factor(){ local AddedSpineArea, spines_um, sec_diam, sec_len, Added_um2, spines_um2
+    AddedSpineArea	= $1
+    spines_um		= $2
+    sec_diam		= $3
+    sec_len		= $4
+
+    Added_um2	= AddedSpineArea / PI/sec_diam/sec_len	//-- Added per um2
+    spines_um2	= spines_um / PI/sec_diam 		//-- convert desired density from linear to area 
+
+    if( Added_um2 > spines_um2 ){
+      printf( "WARNING: eMorph: Too many explicit spines were added Added=%g ShouldHave=%g\n", \
+		Added_um2, spines_um2 )
+      abort( "" )
+    }
+    return 1 + (spines_um2 - Added_um2) * spine_area_avg_wgt
+  }
+
+  //--------------------------------------------------------------------------------
+  proc abort(){	//- abort( str ) [neuron's stop is a sham]
+    printf( "%s\n", $s1 )
+    execute( "aborting" )	//- generate execution error deliverately
+  }
+  //--------------------------------------------------------------------------------
+  // Adjust RmCm to reflect AddedSpineArea and spines_um density
+  proc Adjust_RmCm_section(){ adjustF
+    adjustF	= RmCm_spine_factor( $1, $2 )
+    cm 		= cm * adjustF
+    g_pas	= g_pas * adjustF
+  }
+
+  //--------------------------------------------------------------------------------
+  // Add a spine to the currently accessed section
+
+  func AddSpine(){ local iNew, nNew, iAddT
+    iNew = $1
+    nNew = $2
+
+    iAddT = SpineTypeSelect()
+    type_added[ iAddT ] += 1
+
+    sprint( cmd_str, "create spine_head_%s, spine_neck_%s", secname(), secname() )
+    execute( cmd_str )
+
+    sprint( cmd_str, "spine_neck_%s {diam=%g L=%g}", secname(), neck_dia[iAddT], neck_len[iAddT] )
+    execute( cmd_str )
+
+    sprint( cmd_str, "spine_head_%s {diam=%g L=%g}", secname(), head_dia[iAddT], head_len[iAddT] )
+    execute( cmd_str )
+
+    sprint( cmd_str, "connect spine_neck_%s(0), %s(%g)", secname(), secname(), (iNew+1)/(nNew+1) )
+    execute( cmd_str )
+	  
+    sprint( cmd_str, "connect spine_head_%s(0), spine_neck_%s(1)", secname(), secname() )
+    execute( cmd_str )
+
+    return( spine_area[ iAddT ] )
+  }
+
+endtemplate eMorph
+
+/*
+objref sP, randSel
+randSel = new Random( 123 )
+sP = new eMorph()
+
+load_file( "n400td-pc2.hoc" )
+*/
