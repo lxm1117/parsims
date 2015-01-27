@@ -1,35 +1,15 @@
 // Initialize
 { 
   //  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
-  chdir("/home/neuro/from_axon/")
+  chdir("/home/ximi/Projects/ParSims")
   load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
   load_file( "stdrun.hoc" )
   load_file( "eMorph-p.hoc" )
   load_file( "do_log.hoc" )
-  chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE")
 }
-objref RunEnv
-{ 
-  RunEnv = new str_obj()
-  RunEnv.nsystem( "echo $cNeuro", RunEnv.s1 )	// get value of cNeuro environment var into RunEnv.s1
-  RunEnv.nsystem( "arch", RunEnv.s2 )		// get arch of machine we're running on on RunEnv.s2
-  if( ! strcmp( RunEnv.s2, "ppc" ) ) {		// NMOD_dll filename appropriate to our architecture on RunEnv.s3
-    sprint( RunEnv.s3, "%s/lib/nrn/NMOD/ca1n1-mod/powerpc/.libs/libnrnmech.so", RunEnv.s1 )
-  } else {
-    if( ! strcmp( RunEnv.s2, "i686" ) || ! strcmp( RunEnv.s2, "i386" ) ) {
-      sprint( RunEnv.s3, "/axon/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/i686/.libs/libnrnmech.so", RunEnv.s1 )
-    } else {
-      if( ! strcmp( RunEnv.s2, "x86_64" ) ) {
-	//sprint( RunEnv.s3, "/axon/d1/Users/ximing/cNeuro/lib/nrn/NMOD/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1 )
-        sprint( RunEnv.s3, "/home/neuro/from_axon/ca1n1-mod/x86_64/.libs/libnrnmech.so", RunEnv.s1)
-	print RunEnv.s3
-	} else {
-        printf( "\n\n\tUnknown architecture >>%s<<\n\n", RunEnv.s2 )
-      }
-    }
-  }
-  nrn_load_dll( RunEnv.s3 )
-}
+
+  nrn_load_dll("/home/ximi/Projects/ParSims/from_axon_new/ca1n1-mod/x86_64/.libs/libnrnmech.so" )
+
 
 //================================================================================
 func vdef(){
@@ -322,13 +302,13 @@ objref stim
 proc do_cell(){
   
   forall delete_section()
-  chdir("/home/neuro/from_axon/n400td")
+  chdir("/home/ximi/Projects/ParSims")
   load_file( 1, $s1 )	// load cell
   if( numarg()>1 ) load_file( 1, $s2 )	// load axon
   soma {
     stim	= new IClamp(0.5)
   }
-  chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE")
+  // chdir("/Volumes/d1/Users/ximing/Projects/ParSims/pDE")
 }
 
 //================================================================================
