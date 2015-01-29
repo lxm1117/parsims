@@ -1,0 +1,5 @@
+Unloading compiler-dependent module openmpi_ib/1.6.5
+Unloading compiler-dependent module mvapich2_ib/1.9
+Unloading compiler-dependent module openmpi_ib/1.6.5
+Unloading compiler-dependent module mvapich2_ib/1.9
+[trestles-12-25.sdsc.edu:mpirun_rsh][child_handler] Error in init phase, aborting! (0/1 mpispawn connections)

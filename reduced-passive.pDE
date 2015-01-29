@@ -11,7 +11,7 @@ Tmp-dir MyTemp
 #Fit  072006b   311   200     10     3    0.85  1.0 randE Projects/ParSims/Runs_pDE/thin-1stspike/main-n400-Vbtim-simL-v8d-reduced.hoc
 #Fit  072006b   199   110     25     3    0.7  1.0 randE Projects/ParSims/Runs_pDE/thin-1stspike/main-n400-Vbtim-simL-v8d-reduced.hoc
 #Fit  072006b   713   120     50     3    0.85  1.0 randE Projects/ParSims/Runs_pDE/thin-1stspike/main-n400-Vbtim-simL-v8d-reduced.hoc
-Fit  072006b    191   200      10     3    0.85  1.0 randE /home/ximi/Projects/reduced-passive.hoc
+Fit  072006b    191   200      10     3    0.85  1.0 randE /home/ximi/Projects/ParSims/reduced-passive.hoc
 #================================================================================
 # 10oct08 4:40pm
 # Set up traces for 072006b

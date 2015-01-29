@@ -1,0 +1,27 @@
+#!/bin/bash
+
+#PBS -q shared
+#PBS -N parsims
+#PBS -l nodes=1:ppn=16
+#PBS -o job_output
+#PBS -e error_output
+#PBS -V
+#pBS -M xl285608@ohio.edu
+#PBS -m abe
+#PBS -A csd403
+#PBS -l walltime=00:59:59
+
+LOG="reduced-passive.pDE"
+iRun=1
+
+#MyTemp
+
+#while [ -e $LOG-$iRun.log] || [-e $LOG-$iRun.logE];do
+#	let ++iRun
+#done
+
+cd /oasis/scratch/trestles/$USER/temp_project
+
+LOG=$LOG-$iRun.log
+LOGE=${LOG}E
+mpirun_rsh -np 16 -hostfile $PBS_NODEFILE /home/ximi/Projects/ParSims/pDEdir/pDE /home/ximi/Projects/ParSims/reduced-passive.pDE #$LOG > $LOGE 2>&1 &

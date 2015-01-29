@@ -39,6 +39,9 @@ int main( int argc, char *argv[] )
  
   load_job_spec( argc, argv, pRn );		/* load parms into all processes */
 
+  //check
+  printf("checkmark");
+
   pRn->P_errD = pRn->D;
   pRn->P_errS = pRn->D + pRn->fCaseN;
   pRn->P_etime = pRn->P_errS + 1;
@@ -59,6 +62,8 @@ int main( int argc, char *argv[] )
     }
   }
   else eval_slave( pRn ); 
+  //check
+  printf("checkmark2");
 
   xfree( (char *) pRn->pB );
   xfree( (char *) pRn->sA );
