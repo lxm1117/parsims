@@ -1,0 +1,1072 @@
+
+
+// ------hoc_main--->>/home/ximi/Projects/ParSims/codes/reduced-passive.hoc<<---------------
+// Initialize
+{ 
+  //  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  //chdir("/home/ximi/Projects/ParSims")
+  load_file( "eTrace-p.hoc", "eTrace_loaded" ) 
+  load_file( "stdrun.hoc" )
+  load_file( "eMorph-p.hoc" )
+  load_file( "do_log.hoc" )
+}
+
+  nrn_load_dll("libnrnmech.so" )
+
+
+//================================================================================
+func vdef(){
+  if( name_declared( $s1 ) == 5 ) return 1
+  return 0
+}
+//================================================================================
+func Boltz(){
+  return 1/(1+exp(($1-$2)/$3))
+}
+
+func max(){ local i, im
+  im = $1
+  for i=1, numarg() if( $i>im ) im = $i
+  return im
+}
+
+func GaussLike(){ // x, A, W, D
+  return $2*exp(-($1-$4)^2/$3 )
+}
+
+// Perpendicular y distance
+func ydistP(){
+ // if(ismembrane("morpho")){
+ //	return abs(0.5*(y0_morpho+y1_morpho))
+ // }else { return abs( y3d(0)+y3d(n3d()-1) )/2}
+ return distance(0.5)
+}
+
+//================================================================================
+objref eM
+eM = new eMorph()
+eM.idebug = 1
+dfc_idebug = 0
+
+proc mulfit_cell_init() { 
+  soma { distance() }	// set soma(0.5) as reference point
+  //adj_e_pas = G_e_pas - G_e_pas_slope * tgt_bldiff
+  //printf( "adj_e_pas %g G_e_pas %g G_e_pas_slope %g tgt_bldiff %g\n", adj_e_pas, G_e_pas, G_e_pas_slope, tgt_bldiff )
+  forall {
+    do_pas()
+    do_Naf()      // does Naf and Nav16
+    do_h()
+    do_KDR()
+    do_KA()
+  }
+
+
+
+//  if( vdef( "RmCm_spine_gbar")) execute("eM.RmCm_spine_gbar = RmCm_spine_gbar")  // defaults to 0 in template
+  Spnum = 30000
+  if( vdef( "Spine_number"))  Spnum = Spine_number
+  eM.Spine_Comp_RmCm_f3d( "n400_af3d", Spnum )		// We perform Spine compensation after all else is set.
+  //eM.use_morpho_xyz=1
+  //eM.Spine_Comp_RmCm_n400_JAI(Spnum)
+
+  eM.idebug = 0						// show debug info only on first run
+  set_nseg( lambda_f_d )
+	//axon_hill {
+	//	diam(0:1)=soma.diam(1):diam(0)
+	//}
+}
+
+//--------------------------------------------------------------------------------
+proc set_nseg(){ local ns, lfd 
+  nseg_tot = 0
+  lfd = $1
+  soma area( 0.5 )
+  forall { 
+    if( lfd <= 0 ) ns = 1
+    if( lfd >  0 ) ns = int((L/($1 *lambda_f(100))+.9)/2)*2 + 1 
+    if( ns > nseg ) nseg = ns
+    nseg_tot += nseg
+  }
+  printf( "lambda-d %g nseg_tot %d\n", lfd, nseg_tot )
+}
+
+//--------------------------------------------------------------------------------
+proc do_pas(){
+  if( !ismembrane("epasn") ) insert epasn
+  //e_pas	= adj_e_pas
+  g_epasn = 1 / ( G_Rm * 1000 )
+  Ra	= G_Ra//*1000
+  cm	= G_cm
+
+  ifsec "soma" {
+    if( vdef( "soma_l"))     L=soma_l
+    if( vdef( "soma_diam"))  diam=soma_diam	
+    if( vdef( "soma_cm" )) cm	= soma_cm
+    if( vdef( "soma_Rm" )) g_epasn	= 1/ ( soma_Rm * 1000 )
+    if( vdef( "soma_Ra" )) Ra	= soma_Ra//*1000
+  }
+  ifsec "axon" {		// aX_ => generic for all axons but Hillock
+    if( vdef( "aX_cm" )) cm	= aX_cm
+    if( vdef( "aX_Rm" )) g_epasn	= 1/ ( aX_Rm * 1000 )
+    if( vdef( "aX_Ra" )) Ra	= aX_Ra//*1000
+  }
+  ifsec "axon_mnode" {		// aXm_ special for myelin can override generic
+    if( vdef("aXm_cm"))	cm	= aXm_cm
+    if( vdef("aXm_Rm"))	g_epasn	= 1/ ( aXm_Rm * 1000 )
+    if( vdef("aXm_Ra"))	Ra	= aXm_Ra//*1000
+  }
+  ifsec "axon_inode" {		// aXr_ special for nodes of Ranvier can override generic
+    if( vdef("aXr_cm"))	cm	= aXr_cm
+    if( vdef("aXr_Rm"))	g_epasn	= 1/ ( aXr_Rm * 1000 )
+    if( vdef("aXr_Ra"))	Ra	= aXr_Ra//*1000
+  }
+  ifsec "axon_iseg[0]" {	
+	//if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
+	L=30
+	diam=1
+  }
+  ifsec "axon_iseg[1]" {
+	//if(vdef("aX_iseg_l")) L=aX_iseg_l*0.5
+	L=40
+	diam=1
+  }
+  ifsec "axon_hill" {
+	if(vdef("axon_hill_l")){ 
+		L=axon_hill_l
+	}else{L=5}
+	diam(0:1)=2.8:1
+  }
+}
+//--------------------------------------------------------------------------------
+
+proc do_Naf(){
+  if( vdef( "Gbar_Naf" )){
+    if( !ismembrane("Naf_i0")) insert Naf_i0
+
+    nai0_na_ion = 10
+    nao0_na_ion = 145       
+    nai=nai0_na_ion
+    nao=nao0_na_ion
+    ena=nernst(nai0_na_ion, nao0_na_ion,1)
+
+    gbar_Naf_i0 = Gbar_Naf	// default value unless overriden below
+ 
+    ifsec "soma" 	if(vdef("s0_Gbar_Naf"))		gbar_Naf_i0 	= s0_Gbar_Naf
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_Naf"))	gbar_Naf_i0 	= aXh_Gbar_Naf
+    ifsec "axon_mnode" if(vdef("aXm_Gbar_Naf"))		gbar_Naf_i0 	= aXm_Gbar_Naf
+    if( issection("axon_mnode.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon_iseg" {
+	//if(!ismembrane("Naf_i1")) {
+		insert Naf_i1
+		uninsert Naf_i0
+	//}	
+	ifsec "axon_iseg[0]"  if( vdef("aXi0_Gbar_Naf"))		gbar_Naf_i1 	= aXi0_Gbar_Naf
+	ifsec "axon_iseg[1]"  if( vdef("aXi1_Gbar_Naf"))		gbar_Naf_i1 	= aXi1_Gbar_Naf
+    }
+    ifsec "axon_inode" 	      if( vdef("aXr_Gbar_Naf"))			gbar_Naf_i0	=aXr_Gbar_Naf
+  }
+}
+
+
+//--------------------------------------------------------------------------------
+proc do_KDR(){ local i
+  if( vdef( "Gbar_KDR" )){
+    if( !ismembrane("KDR_i1") ) insert KDR_i1
+    
+    ki0_k_ion=140
+    ko0_k_ion=2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek=nernst(ki0_k_ion, ko0_k_ion, 1) 
+
+    gbar_KDR_i1 = Gbar_KDR
+    if(vdef("Gbar_KDR_dslope") && !issection("axon.*")) 	gbar_KDR_i1 = Gbar_KDR *(1+Gbar_KDR_dslope*ydistP())
+
+    ifsec "soma" 	if(vdef("s0_Gbar_KDR"))			gbar_KDR_i1 	= s0_Gbar_KDR
+    ifsec "axon_hill" 	if(vdef("s0_Gbar_KDR"))			gbar_KDR_i1 	= s0_Gbar_KDR
+
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KDR"))		gbar_KDR_i1 	= aXh_Gbar_KDR
+
+    ifsec "axon" if( vdef("aX_Gbar_KDR"))			gbar_KDR_i1	= aX_Gbar_KDR
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KDR" )) 				gbar_KDR_i1 	= aXi_Gbar_KDR
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KDR" )) 	gbar_KDR_i1 	= aXi0_Gbar_KDR
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KDR" )) 	gbar_KDR_i1 	= aXi1_Gbar_KDR
+    }
+    ifsec "axon_node"       	if( vdef( "aXr_Gbar_KDR" )) 	gbar_KDR_i1 	= aXr_Gbar_KDR
+    ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_KDR" )) 	gbar_KDR_i1 	= aXm_Gbar_KDR
+  }
+}
+
+
+
+//--------------------------------------------------------------------------------
+proc do_KA(){ local i
+  if( vdef( "Gbar_KA" )){
+    if( !ismembrane("KA_i1") ) insert KA_i1
+    
+    ki0_k_ion = 140
+    ko0_k_ion = 2.5
+    ki=ki0_k_ion
+    ko=ko0_k_ion
+    ek = nernst(ki0_k_ion, ko0_k_ion, 1)
+
+    gbar_KA_i1 = Gbar_KA
+    if(vdef("Gbar_KA_dslope") && !issection("axon.*")) 		gbar_KA_i1 = Gbar_KA *(1+Gbar_KA_dslope*ydistP() )
+  
+    
+    ifsec "axon_hill" 	if(vdef("aXh_Gbar_KA"))			gbar_KA_i1 	= aXh_Gbar_KA
+    ifsec "axon_myelin" if(vdef("aXm_Gbar_KA"))			gbar_KA_i1 	= aXm_Gbar_KA
+    if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
+
+    ifsec "axon" if( vdef("aX_Gbar_KA"))			gbar_KA_i1	= aX_Gbar_KA
+    ifsec "axon_iseg" {	
+      if( vdef( "aXi_Gbar_KA" )) 				gbar_KA_i1 	= aXi_Gbar_KA
+      ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_KA" )) 	gbar_KA_i1 	= aXi0_Gbar_KA
+      ifsec "axon_iseg[1]" 	if( vdef( "aXi1_Gbar_KA" )) 	gbar_KA_i1 	= aXi1_Gbar_KA
+    }
+    ifsec "axon_inode"       	if( vdef( "aXr_Gbar_KA" )) 	gbar_KA_i1 	= aXr_Gbar_KA
+    ifsec "axon_mnode"       	if( vdef( "aXm_Gbar_KA" )) 	gbar_KA_i1 	= aXm_Gbar_KA
+  }
+}
+
+
+//--------------------------------------------------------------------------------
+proc do_h(){ local i
+  if( vdef( "Gbar_h" )){
+    if( !ismembrane("h_i0") ) insert h_i0
+    eh_i0 = G_eh
+    gbar_h_i0 = Gbar_h
+    if(vdef("Gbar_h_dslope") && !issection("axon.*")) 	gbar_h_i0 = Gbar_h *(1+Gbar_h_dslope*ydistP() )
+
+    //ifsec "axon_hill" 	if(vdef("aXh_Gbar_h"))			gbar_h_i0 	= aXh_Gbar_h
+    //ifsec "axon_myelin" if(vdef("aXm_Gbar_h"))			gbar_h_i0 	= aXm_Gbar_h
+    //if( issection("axon_myelin.*") || issection("axon_hill.*" ) ) return
+
+    //ifsec "axon" if( vdef("aX_Gbar_h"))				gbar_h_i0	= aX_Gbar_h
+    //ifsec "axon_iseg" {	
+    //  if( vdef( "aXi_Gbar_h" )) 				gbar_h_i0 	= aXi_Gbar_h
+    //  ifsec "axon_iseg[0]" 	if( vdef( "aXi0_Gbar_h" )) 	gbar_h_i0 	= aXi0_Gbar_h
+    //  ifsec "axon_iseg[1]" 	if( vdef( "aXi0_Gbar_h" )) 	gbar_h_i0 	= aXi1_Gbar_h
+    //}
+    //ifsec "axon_node"       	if( vdef( "aXr_Gbar_h" )) 	gbar_h_i0 	= aXr_Gbar_h
+    //ifsec "axon_myelin"       	if( vdef( "aXm_Gbar_h" )) 	gbar_h_i0 	= aXm_Gbar_h
+  }
+}
+
+//----------------------------------------------------------------------
+objref iss
+init_first = 1
+iss_unstable = 0 	// set 0 to find out; once set avoid running again
+proc init() {   local v0, v1 
+  if( init_first ){
+    init_first = 0
+    // calculate G_e_pas_slope to adjust e_pas for each trace's baseline
+    //G_e_pas_slope = 0
+    //G_e_pas += 1
+    mulfit_cell_init()
+    iss.init_steady_state	// init_steady_state()
+    if( check_iss_unstable()) return
+    v1 = v
+    //G_e_pas -= 1
+    mulfit_cell_init()
+    iss.init_steady_state	// init_steady_state()
+    if( check_iss_unstable()) return
+    v0 = v
+    //G_e_pas_slope = 1/(v1-v0)
+    //printf( "init: G_e_pas_slope %g\n", G_e_pas_slope )
+    
+  }
+  mulfit_cell_init()
+  init_last_call()	// hook to insert changes just before run() call
+  iss.init_steady_state() // init_steady_state()
+  if( check_iss_unstable()) return
+}
+
+// Hook to insert changes just before run() call (can be redefined later)
+proc init_last_call(){
+}
+
+//----------------------------------------------------------------------
+func check_iss_unstable(){
+  if( iss.dV > iss_unstable_th ){
+    iss_unstable = 1
+    printf( ">>>init: UNSTABLE Steady State iss.dV=%g iss_unstable_th=%g; setting tstop=20<<<\n", \
+    iss.dV, iss_unstable_th )
+    tstop = 20
+    return 1
+  }
+  return 0
+}
+
+//----------------------------------------------------------------------
+objref stim
+proc do_cell(){
+  
+  forall delete_section()
+  load_file( 1, $s1 )	// load cell
+  if( numarg()>1 ) load_file( 1, $s2 )	// load axon
+  soma {
+    stim	= new IClamp(0.5)
+  }
+}
+
+//================================================================================
+// pDE interface related code
+
+begintemplate pDE_fit_case
+  strdef id, Mtemplate, Mfunc, scaleF, hoc_var, hoc_before, hoc_after, tgt_file, tgt_before, tgt_after
+  public id, Mtemplate, Mfunc, scaleF, hoc_var, hoc_before, hoc_after, tgt_file, tgt_before, tgt_after
+  public scaleF, tgt_bldiff
+  proc init(){
+    id		= $s1
+    Mtemplate 	= $s2
+    Mfunc	= $s3
+    scaleF	= $s4
+    hoc_var	= $s5
+    hoc_before	= $s6
+    hoc_after	= $s7
+    tgt_file	= $s8
+    tgt_before  = $s9
+    tgt_after  	= $s10
+    
+    tgt_bldiff	= 0	// baseline differential from avg of tgt set
+  }
+endtemplate pDE_fit_case
+
+proc dfc_do_cmd(){ localobj so, sf
+  sf = new StringFunctions()
+  so = new str_obj()
+  sprint( so.s1, "%s;", $s1 )
+  while( strcmp( so.s1, "")){
+    sf.head( so.s1, ";", so.s2  )
+    if( strcmp( so.s2, "" )) {
+      if( dfc_idebug ) printf( "\ndfc_do_cmd: %s\n", so.s2 )
+      if( numarg() == 1 ) execute( so.s2 )
+      if( numarg() == 2 ) execute( so.s2, $o2 )
+      if( numarg() == 3 ) $o3.append( new str_obj( so.s2 ))
+    }
+    sf.tail( so.s1, ";", so.s1  )
+  }
+}
+
+//----------------------------------------------------------------------------------------------------
+objref pDE_fc_list
+objref dfc_tgt, dfc_tgtL
+{ blmin=1 blMax=19 } // baseline limits (ms)
+
+func dfc_load_dfc_tgt(){ local i localobj fc_i, sf, str, pDE_fc_i
+  pDE_fc_i=$o1
+  sf=new StringFunctions() str=new str_obj()
+  dfc_tgt = new eTrace()
+  dfc_tgt.idebug = dfc_idebug
+  dfc_do_cmd( pDE_fc_i.tgt_before )
+  if( sf.head( pDE_fc_i.tgt_file, ".txt$", str.s1 ) >= 0 ) dfc_tgt.load_file_home( pDE_fc_i.tgt_file )
+  //if( sf.head( pDE_fc_i.tgt_file, ".htf$", str.s1 ) >= 0 ) dfc_tgt.load_htf_1p0c( pDE_fc_i.tgt_file, "HOME" )
+  if( sf.head( pDE_fc_i.tgt_file, ".htf$", str.s1 ) >= 0 ) dfc_tgt.load_htf_1p0c( pDE_fc_i.tgt_file, "PWD" )
+  dfc_do_cmd( pDE_fc_i.tgt_after )
+  return dfc_tgt.vec_v.mean( round(blmin/dfc_tgt.dt_sample), round(blMax/dfc_tgt.dt_sample)) // return mean from blmin to blMax
+}
+
+func round(){ return int( 0.5 + $1 ) }
+
+proc dfc_load_traces(){ local i, j, tmp, bl_avg, bl_i localobj pDE_fc_i, blV
+  dfc_tgtL = new List()
+  blV = new Vector()
+  bl_avg = 0
+  for i=0, pDE_fc_list.count-1 { 
+    bl_i = dfc_load_dfc_tgt( pDE_fc_list.o(i) )
+    dfc_tgtL.append( dfc_tgt )
+    blV.append( bl_i )
+    bl_avg += (bl_i - bl_avg)/(i+1)			// clever way to compute running avg
+  }
+  printf( "dfc_load_traces: found bl_avg %g.\n", bl_avg )
+  if( vdef( "BL_avg" )) {
+    printf( "dfc_load_traces: Using preset BL_avg %g\n", BL_avg )
+    bl_avg = BL_avg          // Use BL_avg if defined in pDE script
+  }
+  for i=0, pDE_fc_list.count-1 {
+    pDE_fc_list.o(i).tgt_bldiff = bl_avg - blV.x[i]
+    printf( "dfc_load_traces i %d bli %g bl_avg %g tgt_bldiff %g\n", i, blV.x[i], bl_avg, pDE_fc_list.o(i).tgt_bldiff )
+  }
+}
+
+//----------------------------------------------------------------------------------------------------
+strdef cell_file_name, axon_file_name	// so they can be defined in pDE VERBATIM
+proc pDE_init_cell(){
+  // Not needed here. Out so that dfc_run_agai works  pDE_asg()	// so that do_cell can use name_declared() calls
+  //  do_cell( "n420t-pc2-L10000-ignoreD-newsoma.hoc", "naceaxon-m-0-long.hoc" )
+  //  do_cell( "n420t-pc2-L10000-ignoreD-newsoma.hoc", "Meeks-axon-0.hoc" )
+  //  do_cell( "n420t-pc2-L10000-ignoreD-newsoma.hoc", "ca1b-rot-axon-750-aE-v2.hoc" )
+  //  do_cell( "n420t-pc2-L10000-ignoreD-newsoma.hoc", "my-ca1-isegs-myelin.hoc" )
+  //  do_cell( "n420t-pc2-L10000-DL.hoc", "my-ca1-isegs-myelin.hoc" ) 
+  if( strcmp(cell_file_name,"")==0 ) cell_file_name = "n420t-pc2-L10000-ignoreD-newsoma.hoc"
+  //if( strcmp(axon_file_name,"")==0 ) axon_file_name = "my-ca1-isegs-myelin.hoc"
+  do_cell( cell_file_name) 
+  if( vdef( "soma_diam_f")) forsec "soma" { diam *= soma_diam_f printf( "soma diam %s %g\n", secname(), diam ) }
+  
+  { cvode.active(1) cvode.atol(1.e-10) }
+
+  iss = new initss( cvode, -80 )		// iss_v_init = -80
+  iss.idebug = 0.5
+  iss_unstable_th = 0.1
+  iss_unstable_penalty = 1e20
+
+  execute( "access soma" )			// avoid sintax error if soma is not created at compile time
+}
+
+//----------------------------------------------------------------------------------------------------
+obfunc set_sim_stim(){ local i localobj eT, sT
+  { eT = $o1 sT=$o2 }
+  { eT.stim_amp=sT.amp eT.stim_del=sT.del eT.stim_dur=sT.dur }
+  return eT
+}
+
+//----------------------------------------------------------------------------------------------------
+objref dfc_i, dfc_tgt_i, dfc_sim, dfc_sim_rec, dfc_simL, dfc_eD
+objref dfc_recL, dfc_simL_i, dfc_sim_recL
+
+dfc_first = 1
+func pDE_do_fit_case(){ local i, icase, irec localobj str, sL
+  icase = $1
+  if( dfc_first ) {
+    dfc_first = 0
+    dfc_simL = new List()
+    pDE_asg()                   // so that init_cell and load_traces can use vdef() calls
+    dfc_load_traces()
+    pDE_init_cell()
+  }
+  dfc_i = pDE_fc_list.o( icase )
+  dfc_tgt_i = dfc_tgtL.o( icase )
+  
+  str = new str_obj() 
+  execute( str.sPrint( "dfc_eD = new %s()", dfc_i.Mtemplate ).s1 )
+  dfc_eD.idebug = dfc_idebug
+  tstop = dfc_tgt_i.vec_t.x[ dfc_tgt_i.vec_t.size-1 ] + dfc_tgt_i.dt_sample 
+  
+  dfc_recL = new List()
+  sL = str.split( dfc_i.hoc_var, ";" )	// split to get list of recording section locations
+  for i=0, sL.count-1 execute( str.sPrint( "%s dfc_recL.append( new SectionRef())", sL.o(i).s1 ).s1 )
+
+  dfc_do_cmd( dfc_i.hoc_before )	// hoc_before here; so stim parms can be set in hoc_before code
+
+  dfc_sim_recL = new List()
+  for irec=0, dfc_recL.count-1 {
+    dfc_sim_recL.append( new eTrace() )
+    set_sim_stim( dfc_sim_recL.o(irec), stim )    
+    //    dfc_sim_recL.o(irec).stim_amp = stim.amp
+    //    dfc_sim_recL.o(irec).stim_dur = stim.dur
+    //    dfc_sim_recL.o(irec).stim_del = stim.del
+    dfc_sim_recL.o(irec).idebug = dfc_idebug
+    dfc_sim_recL.o(irec).dt_sample = -1		// -1 => non-uniform for cvode
+    dfc_sim_recL.o(irec).name = sL.o(irec).s1	// place recording section in name
+    dfc_recL.o(irec).sec cvode.record( &v(0.5), dfc_sim_recL.o(irec).vec_v, dfc_sim_recL.o(irec).vec_t )
+  }
+  access dfc_recL.o(0).sec
+
+  if( ! iss_unstable ){		// run only if previous case was stable (ie not unstable); see init()
+    printf( "\n\t" )
+    system( "date" )
+    printf( "case %s\n", dfc_i.id )
+    tgt_bldiff = dfc_i.tgt_bldiff
+    pDE_asg()
+    run() 
+    dfc_simL_i = new List()
+    for irec=0, dfc_recL.count-1 dfc_simL_i.append( dfc_sim_recL.o(irec).copy() )
+    dfc_simL.append( dfc_simL_i )
+  }  
+  if( iss_unstable ){
+    dfc_err = iss.dV / iss_unstable_th * iss_unstable_penalty
+  }else{
+    dfc_do_cmd( dfc_i.hoc_after )	// hoc_after
+    dfc_err = 0 
+    //    dfc_err = dfc_eD.listM( dfc_i.Mfunc, dfc_sim, dfc_tgtLi ) 
+    dfc_eD.ilog = 1
+    printf( "id %s ", dfc_i.id )
+    //    sprint( str.s1, "dfc_err = dfc_eD.%s( dfc_sim, dfc_tgt_i )", dfc_i.Mfunc )
+    //    sprint( str.s1, "dfc_err = dfc_eD.%s( dfc_simL_i.o(0), dfc_tgt_i )", dfc_i.Mfunc )
+    //    execute( str.s1 )
+    execute( str.sPrint( "dfc_err=%s", dfc_i.Mfunc).s1 )
+  }
+  execute( str.sPrint( "dfc_scaleF = %s", dfc_i.scaleF ).s1 )
+  printf( " dfc_scaleF %g pDE_do_fit_case %g\n", dfc_scaleF, dfc_err*dfc_scaleF )
+
+  return dfc_err * dfc_scaleF
+}
+
+//----------------------------------------------------------------------------------------------------
+begintemplate recSpec
+  objref sr, eT
+  strdef name
+  public name, sr, vr, eT, dist, tzc
+  proc init(){
+    sr = new SectionRef()
+    name = secname()
+    vr = $1
+    dist = distance( vr )
+    eT = new eTrace()
+  }
+  public set_eT
+  obfunc set_eT(){
+    eT = $o1.copy()
+    eT.resample_dt(0.01)
+    eT.vec_dv.deriv( eT.vec_v, eT.dt_sample, 2 )
+    eT.vec_ddv = new Vector()
+    eT.vec_ddv.deriv( eT.vec_dv, eT.dt_sample, 2 )
+    tzc = eT.vec_t.x( eT.vec_v.indwhere(">=",0) )
+    return eT
+  }
+  public sort_dist
+  obfunc sort_dist(){ local i localobj iO, iOs, rL, rLs
+    rL = $o1
+    iO = new Vector()
+    for i=0, rL.count-1 iO.append( rL.o(i).dist )
+    iOs = iO.sortindex()
+    rLs = new List()
+    for i=0, rL.count-1 rLs.append( rL.o(iOs.x[i]) )
+    return rLs
+  }
+endtemplate recSpec
+
+//----------------------------------------------------------------------------------------------------
+// Run again case icase and return eTrace results
+obfunc dfc_run_againL(){ local i, icase localobj eT, eT1, dfc_i, dfc_tgt_i, rL, eTL
+  icase = $1
+  dfc_i = pDE_fc_list.o( icase )
+  dfc_tgt_i = dfc_tgtL.o( icase )
+  pDE_init_cell()
+  dfc_do_cmd( dfc_i.hoc_before )
+  tstop = dfc_tgt_i.vec_t.x[ dfc_tgt_i.vec_t.size-1 ] + dfc_tgt_i.dt_sample 
+  tgt_bldiff = dfc_i.tgt_bldiff
+  
+  rL = new List()
+  access   soma 
+  distance()
+  rL.append( new recSpec( x ))
+  forsec "axon" for (x) if(x>0&&x<1) rL.append( new recSpec( x ))
+  eTL = new List()
+  for i=0, rL.count-1 {
+    eTL.append( new eTrace() )
+    set_sim_stim( eTL.o(i), stim )    
+    rL.o(i).sr.sec cvode.record( &v( rL.o(i).vr ), eTL.o(i).vec_v, eTL.o(i).vec_t )
+  }
+  run()
+  for i=0, rL.count-1 rL.o(i).set_eT( eTL.o(i) )
+  return rL
+}
+
+// Return (and plot if pG present) rL for each parm value variation runs vp+ivp*k1 to vp+ivp*k2 in ivp steps
+// ( icase, "var", vp, ivp, k1, k2 [, pG [,opt]] )
+obfunc dfc_var_runsL(){ local i, imin, tmin, icase, vp, ivp, nv, k, k1, k2, opt localobj eT, eT1, eTL, str, pG, rL, rLL
+  icase = $1
+  str = new str_obj( $s2 )
+  { vp=$3 ivp=$4 k1=$5 k2=$6 }
+  rLL = new List()
+  for k=k1, k2 {
+    nv = vp + ivp * k
+    sprint( str.s2, "%s=%g", str.s1, nv )
+    execute( str.s2 )
+    rL = dfc_run_againL(icase) 
+    rL.o(0).eT.name = str.s2
+    rLL.append( rL )
+  }
+  if( numarg()>6 ){ 
+    eT = plot_rLL_dt( rLL )
+    $o7 = eT.plotG
+    { eT.plotG.view(0,0,10,10, 100+20+300*1.8, 100, 300*2.5, 200*3 ) eT.plotG.exec_menu( "View = plot" ) }
+    { opt = 101 if( numarg()>8 ) opt = $9 }
+    pG = new Graph(0)
+    for k=0, rLL.count-1 pG = rLL.o(k).o(0).eT.iso_spike(dfc_seg_look_options(),1,-0.5,0).plot_ddv( pG, opt, k+1 )
+    { pG.view(0,0,10,10, 100, 100, 300*1.8, 200*3 ) pG.exec_menu( "View = plot" ) }
+    $o8 = pG
+  }
+  return rLL
+}
+
+obfunc plot_rLL_dt(){ local k, i, imin, tmin localobj eT, eT1, rLL, rL
+  rLL = $o1
+  eT = new eTrace()
+  eT.plotG = new Graph(0)
+  for k=0, rLL.count-1 {
+    rL = rLL.o(k)
+    tmin = 1e70
+    for i=0, rL.count-1 {
+      eT.plotG.mark( rL.o(i).dist, rL.o(i).tzc, "s", 5, axon_color( rL.o(i).name), 1 )
+      if( rL.o(i).tzc<tmin ){ imin=i tmin=rL.o(i).tzc }
+    }
+    for i=0, rL.count-1 if( rL.o(i).tzc==tmin ) eT.plotG.mark( rL.o(i).dist, rL.o(i).tzc, "S", 6, axon_color( rL.o(i).name), 1 )
+    
+    // if(k==0){ eT.plotG=new Graph() eT.plotG.align( 1, 1 ) eT.plotG.label( 1-1/22, 1-1/22 ) }
+    eT1 = rL_td_eT( rL )
+    sprint( eT1.name, "%s t=%4.2f vel=%4.2f", rL.o(0).eT.name, tmin, axon_speed(rL) )
+    eT.addplot_c( eT1, k%7+1 )
+  }
+  return eT
+}
+
+obfunc run_plot_all_axon_ddv(){ local i, icase, tspk, tL, tR localobj pG, rL, sf, eT
+  icase = $1
+  tL=-0.5 if( numarg()>1 )tL=$2
+  tR=0    if( numarg()>2 )tR=$3
+  sf = new StringFunctions()
+  rL = dfc_run_againL( icase ) // rL.o(0) is soma
+  pG = new Graph()
+  rL.o(0).eT.copy().iso_spike(dfc_seg_look_options(),1,-0.5,0, &tspk )
+  printf( "tspk %g\n", tspk )
+  for i=0, rL.count-1 {
+    if( sf.substr(rL.o(i).name, "node")>=0 || sf.substr(rL.o(i).name, "myelin")>=0 ) continue
+    pG.color( axon_color(rL.o(i).name ))
+    eT = rL.o(i).eT.copy().cut_at2( tspk+tR, tspk+tL )
+    eT.vec_t.add( tL )
+    // pG = rL.o(i).eT.copy().cut_at2(tspk+0.1,tspk-0.5).plot_ddv( pG, 001, axon_color(rL.o(i).name) )
+    eT.vec_ddv.line( pG , eT.vec_t )
+  }
+  pG.exec_menu( "View = plot" )
+  return pG
+}
+
+// calculate speed between nodes with min and max tzc
+func axon_speed(){ local i, im, iM, vel localobj rL, sf
+  rL = $o1
+  sf = new StringFunctions()
+  im=iM=-1
+  for i=0, rL.count-1 if( sf.substr( rL.o(i).name, "node")>=0 ){
+    if( im<0 ) im=iM=i // set to first "node" match
+    if( rL.o(i).tzc < rL.o(im).tzc ) im=i
+    if( rL.o(i).tzc > rL.o(iM).tzc ) iM=i
+  }
+  vel = ( rL.o(iM).dist - rL.o(im).dist ) / ( rL.o(iM).tzc - rL.o(im).tzc ) * 1e-3 // um/ms * 1e-3 = m/s 
+  printf( "axon_speed: i,tzc min %g %g Max %g %g vel %g\n", im, rL.o(im).tzc, iM, rL.o(iM).tzc, vel )
+  return vel
+}
+
+func axon_color(){ local i, col localobj str, sf
+  str = new str_obj( $s1 )
+  sf = new StringFunctions()
+  col = 1
+  if( sf.head( str.s1, "hill", str.s2 )> 0 ) col = 2
+  if( sf.head( str.s1, "iseg", str.s2 )> 0 ) col = 3
+  if( sf.head( str.s1, "prox", str.s2 )> 0 ) col = 4
+  if( sf.head( str.s1, "myelin", str.s2 )> 0 ) col = 5
+  if( sf.head( str.s1, "node", str.s2 )> 0 ) col = 6
+  return col
+}
+
+//----------------------------------------------------------------------------------------------------
+// Run again case icase and return eTrace results
+obfunc dfc_run_again(){ local icase localobj eT, eT1, dfc_i, dfc_tgt_i
+  icase = $1
+  dfc_i = pDE_fc_list.o( icase )
+  dfc_tgt_i = dfc_tgtL.o( icase )
+  pDE_init_cell()
+  dfc_do_cmd( dfc_i.hoc_before )
+  tstop = dfc_tgt_i.vec_t.x[ dfc_tgt_i.vec_t.size-1 ] + dfc_tgt_i.dt_sample 
+  tgt_bldiff = dfc_i.tgt_bldiff
+
+  eT = new eTrace()
+  set_sim_stim( eT, stim )    
+  soma cvode.record( &v(0.5), eT.vec_v, eT.vec_t )
+  run()
+  eT1 = eT.copy()
+  eT1.resample_dt(0.01)
+  eT1.vec_dv.deriv( eT1.vec_v, eT1.dt_sample, 2 )
+  eT1.vec_ddv = new Vector()
+  eT1.vec_ddv.deriv( eT1.vec_dv, eT1.dt_sample, 2 )
+  return eT1
+}
+
+//----------------------------------------------------------------------------------------------------
+// Return (and plot if pG present) list of parm value variation runs vp+ivp*k1 to vp+ivp*k2 in ivp steps
+obfunc dfc_var_runs(){ local icase, vp, ivp, nv, k, k1, k2, opt localobj eT, eTL, str, pG
+  icase = $1
+  str = new str_obj( $s2 )
+  { vp=$3 ivp=$4 k1=$5 k2=$6 }
+  eTL = new List()
+  for k=k1, k2 {
+    nv = vp + ivp * k
+    sprint( str.s2, "%s = %g", str.s1, nv )
+    execute( str.s2 )
+    eT = dfc_run_again(icase) 
+    eT.name = str.s2
+    eTL.append( eT )
+  }
+  if( numarg()>6 ){
+    { opt = 101 if( numarg()>7 ) opt = $8 }
+    for k=0, eTL.count-1 pG=(eTL.o(k).iso_spike(dfc_seg_look_options(),1,1).plot_ddv( pG, opt, k+1 ))
+    // Note parens. below does not work
+    //for k=0, eTL.count-1 pG=eT.plot_ddv( pG, eTL.o(k).iso_spike(dfc_eD_options(),1,1), opt, k+1 )
+    $o7 = pG
+  }
+  return eTL
+}
+
+//----------------------------------------------------------------------------------------------------
+proc dfc_plot_1(){ local i, n 
+  $o1.plot_color = $3
+  $o1.plot_brush = $4
+  $o1.addplot( $o2 ) 
+}
+
+proc dfc_plot_place(){ local n
+  n = $2
+  $o1.plotG.unmap()
+  $o1.plotG.view(0,0,10,10, (n%5)*(300+20), 100+int(n/5)*(200+65), 300, 200 )
+  $o1.recenter()
+}
+
+func is_obj_name(){ local i localobj sf, str
+  str = new str_obj($s2)  sf = new StringFunctions()
+  sprint( str.s2, "%s", $o1 )
+  if( sf.tail( str.s2, str.s1, str.s3 ) == sf.len(str.s1) ) return 1
+  return 0
+}
+
+objref igL
+strdef pDE_log_name
+obfunc plot_gen(){
+  igL = new pDE_log()
+  igL.read_n_plot( pDE_log_name, pDE_gen_N )
+  return igL
+}
+
+objref pG_axon, pG_sec
+obfunc plot_axon(){ local i, in localobj str
+  pG_axon = new Graph()
+  pG_sec = new List()
+  str = new str_obj()
+  pG_sec.append( new str_obj( "axon_hill" ))
+  in = 19
+  if( vdef( "aX_iseg_n" )) in = aX_iseg_n
+  for i=0,in-1 pG_sec.append( str.copy().sPrint( "axon_iseg[%d]", i ) )
+  pG_sec.append( new str_obj( "axon_prox" ))
+  if( aX_node_n > 0 ){
+    pG_sec.append( new str_obj( "axon_node[0]" ))
+    pG_sec.append( new str_obj( "axon_myelin[0]" ))
+  }
+  pG_sec.append( new str_obj( "soma" ))		// put last so that soma is accessed at the end below
+  for i=0, pG_sec.count-1 {
+    execute( pG_sec.o(0).sPrint( "access %s", pG_sec.o(i).s1 ).s1 )
+    pG_axon.mark( distance(0.5), gbar_Naf_i1, "+", 12, 2, 1 )    
+    pG_axon.mark( distance(0.5), gbar_KDR_i1, "o", 12, 3, 1 )    
+  }
+  pG_axon.exec_menu( "View = plot" )
+  return pG_axon
+}
+
+objref dfc_ddVpG
+obfunc dfc_pG_ddV(){ local i, iopt localobj pG
+  pG = $o1
+  iopt = $2
+  if( iopt==0 ) for i=0,dfc_tgtL.count-1 { dfc_pG_one_ddV(pG,i,001,0,1)   dfc_pG_one_ddV(pG,i,001,1,2) }
+  if( iopt==1 ) for i=0,dfc_tgtL.count-1 { dfc_pG_one_ddV(pG,i,001,0,i+1,1) dfc_pG_one_ddV(pG,i,001,1,i+1,2) }
+  if( iopt==2 ) for i=0,dfc_tgtL.count-1 { dfc_pG_one_ddV(pG,i,010,0,1)   dfc_pG_one_ddV(pG,i,010,1,2) }
+  if( iopt==3 ) for i=0,dfc_tgtL.count-1 { dfc_pG_one_ddV(pG,i,010,0,i+1,1) dfc_pG_one_ddV(pG,i,010,1,i+1,2) }
+  return pG
+}
+
+obfunc dfc_pG_one_ddV(){ local icase, iopt, isel, icol, ibrush localobj eT, pG, eTc
+  if(numarg()>0 ) pG=$o1 
+  if( object_id( pG )==0 ) { pG = new Graph() }
+  icase=$2 iopt=$3 isel=$4 icol=$5 
+  dfc_i = pDE_fc_list.o( icase )
+  ibrush=1 if( numarg()>5 ) ibrush=$6
+  pG.brush( ibrush )
+  if( isel==0 ) eTc = dfc_tgtL.o(icase)
+  if( isel==1 ) eTc = dfc_simL.o(icase).o(0)
+  if( eTc.stim_amp<0.2 || eTc.stim_amp==0.75 ) return pG
+  eT = eTc.iso_spike( dfc_seg_look_options(), 1, -0.65, 0.45 )
+  if( object_id(eT)>0) eT.plot_ddv( pG, iopt, icol )
+  return pG
+}
+
+// per fit-case: dfc_simL has one list entry (with eTraces); dfc_tgtL has one eTrace 
+proc dfc_plot_all(){ local i, j localobj eTi
+  for i=0, dfc_simL.count-1 {
+    eTi = dfc_tgtL.o(i)
+    for j=0, dfc_simL.o(i).count-1 dfc_plot_1( eTi, dfc_simL.o(i).o(j), 2+j, 1 )
+    dfc_plot_1( eTi, eTi, 1, 1 )
+    //    for j=0, dfc_tgtL.o(i).count-1 dfc_plot_1( eTi, dfc_tgtL.o(i).o(j), 1, 1 )
+    dfc_plot_place( eTi, i )
+    eTi.plotG.menu_action("plot_gen","plot_gen()" )
+    eTi.plotG.menu_action("plot_axon","plot_axon()" )
+    eTi.plotG.menu_action("plot_ddVs_all","dfc_ddVpG=new Graph() dfc_pG_ddV(dfc_ddVpG,0)" )
+    eTi.plotG.menu_action("plot_ddVs_color","dfc_ddVpG=new Graph() dfc_pG_ddV(dfc_ddVpG,1)" )
+    eTi.plotG.menu_action("plot_dVs","dfc_ddVpG=new Graph() dfc_pG_ddV(dfc_ddVpG,2)" )
+    eTi.plotG.menu_action("plot_dVs_color","dfc_ddVpG=new Graph() dfc_pG_ddV(dfc_ddVpG,3)" )
+  }
+}
+
+proc dfc_plot_all_old(){ local i 
+  for i=0, dfc_simL.count-1 dfc_plot_one( dfc_simL.o(i), dfc_tgtL.o(i), i )
+}
+
+//================================================================================
+obfunc rL_td_eT(){ local i localobj rL, eT, sIc, sI
+  rL = $o1
+  eT = new eTrace()
+  sIc = new Vector()
+  for i=0, rL.count-1 sIc.append( rL.o(i).dist )
+  sI = sIc.sortindex()
+  for i=0, rL.count-1 {
+    eT.vec_t.append( rL.o(sI.x[i]).dist)
+    eT.vec_v.append( rL.o(sI.x[i]).tzc )
+  }
+  return eT
+}
+
+//--------------------------------------------------------------------------------
+// Usage above
+// objref rLL, pGd, pG
+
+// { pDE_asg() rLL = dfc_var_runsL( 0, "aXh_Gbar_Naf", aXh_Gbar_Naf, aXh_Gbar_Naf*0.1, -2, 2, pGd, pG ) }
+// abort()
+
+
+// end of pDE interface related code
+//================================================================================
+
+
+// ------end hoc_main------
+
+//----- pDE VERBATIM -----
+cell_file_name="n400td-pc2-sp-axn.hoc"
+
+obfunc dfc_set_stims_etc(){
+  print "check pDE dfc_set_stims++++++++++++++++++++"
+ /*
+  if(vdef("aX_hill_nseg"))\
+    execute( "if(axon_hill.nseg<aX_hill_nseg) axon_hill.nseg=aX_hill_nseg" )
+  if(vdef("aX_iseg_nseg")) \
+    execute( "for i=0,aX_iseg_n-1 {if(axon_iseg[i].nseg<aX_iseg_nseg) axon_iseg[i].nseg= aX_iseg_nseg }" )
+  if(vdef("aX_prox_nseg")) \
+    execute( "for i=0,aX_prox_n-1 {if(axon_prox[i].nseg<aX_prox_nseg) axon_prox[i].nseg= aX_prox_nseg }" )
+  if( vdef("aX_mnode_nseg" )) \
+    execute( "forsec \"mnode\" if(nseg<aX_mnode_nseg) nseg= aX_mnode_nseg" )
+  */
+//  execute( "axon_prox.nseg = aX_prox_nseg" )
+//  execute( "for i=0,aX_iseg_n-1 {axon_iseg[i].nseg= aX_iseg_nseg }" )
+  stim.amp=$1
+  stim.dur=$2
+  stim.del=$3
+  print "check stim.del +++++++++++++++++++++++++++"
+  dfc_options_all( dfc_eD )
+  return stim
+}
+
+obfunc dfc_set_tgt(){
+  print "dfc_set_tgt()+++++++++++++++++++++++++++"
+  dfc_tgt.stim_amp=$1
+  dfc_tgt.stim_dur=$2
+  dfc_tgt.stim_del=$3
+  if( numarg()>3 ) dfc_tgt.cut_at2($4,$5)
+  return dfc_tgt
+}
+
+proc dfc_sim_BBF(){
+  dfc_simL_i.o(0).dc_shift(stim.del+BBFdelay,stim.del+stim.dur+BBFdelay,-BBF*stim.amp)
+}
+
+//================================================================================
+// New stuff for pkbeg posfix
+
+obfunc dfc_seg_look_options(){ local i localobj dI
+  dI = new eMatch() if( numarg()>0)dI =$o1
+  dI.seg_option	= 1101
+  dI.seg_dt	= 0.09
+  dI.seg_slp_dt	= 0.09
+  dI.seg_slp_th	= 10
+  dI.seg_v_th	= 0
+  dI.seg_tiny_last	= 0
+  if( strcmp(dfc_i.id,"072006b-2ms+1500pA-pkbeg") == 0 ){ dI.seg_dt=dI.seg_slp_dt= 0.02 }
+  return dI
+}
+
+obfunc dfc_options_all(){ local i localobj eD
+  if( numarg()==0 ) eD = dfc_seg_look_options()
+  if( numarg()> 0 ) eD = dfc_seg_look_options($o1)
+
+  eD.match_option	= 5.2
+  eD.alpha = eD.beta = eD.gamma = eD.delta = eD.eta = eD.mF1 = eD.mF2 = eD.pkP = eD.pkPs = 0
+
+  eD.ilog = 1
+  return eD
+}
+
+// rough match to train; 
+// necessary to avoid traces that don't return to baseline
+// also check spikes also appear in axon
+func dfc_trim(){ local i, t0_tail, f1, f2, r1, r2, res localobj eD
+  f1=$1   f2=$2
+
+  eD = dfc_options_all(dfc_eD)
+  eD.eta 		= 1
+  eD.mF2		= 200
+  eD.pkP		= 1500*5
+  eD.pkPs		= 1
+  eD.pkPsA		= 1
+  
+  t0_tail = stim.del + stim.dur		// end of stimulus
+
+  eD.tmin = t0_tail			// compare tails after end stimulus: axon vs tgt
+  r2 = eD.m0( dfc_simL_i.o(1), dfc_tgt_i ) 
+
+  eD.tmin = 0
+  printf( "\n\t >>dfc_trim: DfpwPkdVa_aXe: " )
+  r1 = eD.DfpwPkdVa_aXe(dfc_simL_i,dfc_tgt_i,-1,-1)	// 800=8.90, 400=15.2, 200=30.82, 1500=6.7  
+  
+  res = r1*f1 + r2*f2
+  printf( "\n\t dfc_trim t0_tail %g r1,2 %g %g f1,f2 %g %g ri*fi %g %g\n\t res %g<<\n",\
+  t0_tail, r1,r2, f1,f2, r1*f1, r2*f2, res )
+  return res
+}
+
+//================================================================================
+// match first spike (up to tmax)
+// gamma and delta to match dV and ddV; largely independent of trace length/stim.amp
+// eta scaled by trace length
+//================================================================================
+func dfc_pkbeg(){ local i, tmax, dV_f, eta_f, r1 localobj eD
+  tmax = $1
+  
+  dV_f = 45*2
+  eta_f = 300 + 100/(tmax-stim.del-1.1)	//  A + B/(time from stim.del to base of spike) A=for spike; B for before spike
+
+  eD = dfc_eD //  eD = dfc_options_all(dfc_eD)
+  // eD.mF2	= 200*10
+  eD.mF2        = 6000 * stim.amp       // peak time error proportional to stimulation amplitude  
+  eD.pkP        = 1500*5
+  eD.pkPs	= 1
+  eD.phi	= 600/116/10 	// range_dV/range_V	old=0.4 * 10
+  eD.phi_1 	= 0.5+0.15
+  eD.phi_2 	= 0.45-0.02
+  eD.chi	= 1000/116/100	// range_ddV/range_V 	old=0.02 * 8
+  eD.chi_1  	= 0.5+0.15	
+  eD.chi_2 	= 0.15	
+  if( numarg()>1) eD.chi_2=$2   // adhoc inserted to override
+  eD.phi*=dV_f eD.chi*=dV_f
+
+  eD.eta	= eta_f	
+  // eD.mF2=0   eD.pkP=1000*eta_f	// for initial pop for Naf & KDR parms
+
+  eD.tmax	= tmax
+  printf( "\n\t >>dfc_pkbeg: DfpwPkdVa: " )
+  r1 = eD.DfpwPkdVa(dfc_simL_i.o(0),dfc_tgt_i)	// 800=8.90, 400=15.2, 200=30.82, 1500=6.7  
+  printf( "\n\t dfc_pkbeg: r1 %g \n\t<<\n", r1 )
+  return r1
+}
+
+
+
+//----- ENDVERBATIM-----
+
+strdef  pDE_log_name
+proc pDE_asg(){
+  // hoc pDE gen variables
+  pDE_log_name = "/home/ximi/Projects/ParSims/codes/reduced-passive.pDE_31Jan15-13-41-41.log"
+  pDE_gen_N = 0
+  pDE_Pop_ibest = 0
+  // hoc set variables
+  dfc_PassWgt = 1
+  RmCm_spine_gbar = 0
+  Spine_number = 30000
+  BL_avg = -74.3052
+  BBF = 1.6
+  BBFdelay = 0
+  lambda_f_d = 0.1
+  G_eh = -30
+  celsius = 35
+  aX_iseg_n = 2
+  s0_Gbar_Naf = 500
+  aXh_Gbar_Naf = 500
+  aXi0_Gbar_Naf = 2500
+  aXi1_Gbar_Naf = 3500
+  aXr_Gbar_Naf = 3000
+  aXm_Gbar_Naf = 50
+  gates_n_Naf_i0 = 1
+  vhalf_n_Naf_i0 = -30
+  slope_n_Naf_i0 = -4.8
+  tauA_n_Naf_i0 = 0.01
+  tauG_n_Naf_i0 = 0.8
+  vhalf_h_Naf_i0 = -64
+  slope_h_Naf_i0 = 9.06
+  tauA_h_Naf_i0 = 8
+  tauG_h_Naf_i0 = 0.5
+  gates_n_Naf_i1 = 1
+  vhalf_n_Naf_i1 = -35
+  slope_n_Naf_i1 = -5
+  tauA_n_Naf_i1 = 0.01
+  tauG_n_Naf_i1 = 0.5
+  vhalf_h_Naf_i1 = -67
+  slope_h_Naf_i1 = 9
+  tauA_h_Naf_i1 = 8
+  s0_Gbar_KDR = 200
+  aXh_Gbar_KDR = 200
+  aXi0_Gbar_KDR = 1500
+  aXi1_Gbar_KDR = 2000
+  aXm_Gbar_KDR = 5
+  aXr_Gbar_KDR = 800
+  Gbar_KDR_dslope = 0
+  gates_n_KDR_i1 = 1
+  vhalf_n_KDR_i1 = 2
+  slope_n_KDR_i1 = -13
+  tauA_n_KDR_i1 = 8
+  tauG_n_KDR_i1 = 0.9
+  vhalf_n_KA_i1 = -30
+  slope_n_KA_i1 = -10
+  tauA_n_KA_i1 = 1
+  vhalfD_h_KA_i1 = -35
+  slope_h_KA_i1 = 10
+  tauA_h_KA_i1 = 20
+  Gbar_KA_dslope = 0.008
+  Gbar_h_dslope = 0.008
+  gates_n_h_i0 = 1
+  vhalf_n_h_i0 = -92.07
+  slope_n_h_i0 = 10
+  tauA_n_h_i0 = 100
+  tau0_n_h_i0 = 0.001
+  tauF_n_h_i0 = 0
+  tauG_n_h_i0 = 0.5
+  tauDv_n_h_i0 = 0
+  // hoc fit variables
+  G_Rm = 61.94599306
+  G_cm = 2.475005194
+  G_Ra = 99.20213655
+  Gbar_Naf = 296.2404133
+  Gbar_KDR = 720.1048238
+  Gbar_KA = 47.3078398
+  Gbar_h = 3.812791504
+}
+// log pDE nfeval
+{ printf( "nfeval %g\n", 3973 ) }
+
+{ load_file( "nrngui.hoc" ) }
+
+// ---------- begin write_eval_hoc ----------
+objref pDE_eval 
+pDE_fc_list = new List() // must be defined (using objref) previously
+
+proc pDE_do_all(){ local i
+  pDE_eval = new Vector() 
+  for i=0, pDE_fc_list.count-1 pDE_eval.append( pDE_do_fit_case( i ))
+
+  printf( "Error Sum %g\nDetail: ", pDE_eval.sum() )
+  for i=0,pDE_eval.size-1 printf( " %10g", pDE_eval.x[i] )
+  printf( "\n" )
+}
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-2ms+375pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "4*dfc_PassWgt*100/tstop", "soma", "dfc_set_stims_etc(375/1000,2,5)", "dfc_sim_BBF()", "2:htf_files/2ms+375pA.htf", "blMax=4", "dfc_set_tgt(375/1000,2,21,136,16)" ))
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-20ms+50pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "2*dfc_PassWgt*100/tstop", "soma", "dfc_set_stims_etc(50/1000,20,5)", "dfc_sim_BBF()", "2:htf_files/20ms+50pA.htf", "blMax=4", "dfc_set_tgt(50/1000,20,21,120,16)" ))
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-20ms-50pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "2*dfc_PassWgt*100/tstop", "soma", "dfc_options_all();dfc_set_stims_etc(-50/1000,20,5)", "dfc_sim_BBF()", "2:htf_files/20ms-50pA.htf", "blMax=4", "dfc_set_tgt(-50/1000,20,21,120,16)" ))
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-20ms-200pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "8.3*dfc_PassWgt*100/tstop", "soma", "dfc_options_all();dfc_set_stims_etc(-200/1000,20,5)", "dfc_sim_BBF()", "2:htf_files/20ms-200pA.htf", "blMax=4", "dfc_set_tgt(-200/1000,20,21,120,16)" ))
+
+pDE_do_all()
+// ---------- end write_eval_hoc ----------
+
+
+dfc_plot_all()
+
+

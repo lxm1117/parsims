@@ -1,0 +1,210 @@
+//----- pDE VERBATIM -----
+cell_file_name="n400td-pc2-sp-axn.hoc"
+
+obfunc dfc_set_stims_etc(){
+  print "check pDE dfc_set_stims++++++++++++++++++++"
+ /*
+  if(vdef("aX_hill_nseg"))\
+    execute( "if(axon_hill.nseg<aX_hill_nseg) axon_hill.nseg=aX_hill_nseg" )
+  if(vdef("aX_iseg_nseg")) \
+    execute( "for i=0,aX_iseg_n-1 {if(axon_iseg[i].nseg<aX_iseg_nseg) axon_iseg[i].nseg= aX_iseg_nseg }" )
+  if(vdef("aX_prox_nseg")) \
+    execute( "for i=0,aX_prox_n-1 {if(axon_prox[i].nseg<aX_prox_nseg) axon_prox[i].nseg= aX_prox_nseg }" )
+  if( vdef("aX_mnode_nseg" )) \
+    execute( "forsec \"mnode\" if(nseg<aX_mnode_nseg) nseg= aX_mnode_nseg" )
+  */
+//  execute( "axon_prox.nseg = aX_prox_nseg" )
+//  execute( "for i=0,aX_iseg_n-1 {axon_iseg[i].nseg= aX_iseg_nseg }" )
+  stim.amp=$1
+  stim.dur=$2
+  stim.del=$3
+  print "check stim.del +++++++++++++++++++++++++++"
+  dfc_options_all( dfc_eD )
+  return stim
+}
+
+obfunc dfc_set_tgt(){
+  print "dfc_set_tgt()+++++++++++++++++++++++++++"
+  dfc_tgt.stim_amp=$1
+  dfc_tgt.stim_dur=$2
+  dfc_tgt.stim_del=$3
+  if( numarg()>3 ) dfc_tgt.cut_at2($4,$5)
+  return dfc_tgt
+}
+
+proc dfc_sim_BBF(){
+  dfc_simL_i.o(0).dc_shift(stim.del+BBFdelay,stim.del+stim.dur+BBFdelay,-BBF*stim.amp)
+}
+
+//================================================================================
+// New stuff for pkbeg posfix
+
+obfunc dfc_seg_look_options(){ local i localobj dI
+  dI = new eMatch() if( numarg()>0)dI =$o1
+  dI.seg_option	= 1101
+  dI.seg_dt	= 0.09
+  dI.seg_slp_dt	= 0.09
+  dI.seg_slp_th	= 10
+  dI.seg_v_th	= 0
+  dI.seg_tiny_last	= 0
+  if( strcmp(dfc_i.id,"072006b-2ms+1500pA-pkbeg") == 0 ){ dI.seg_dt=dI.seg_slp_dt= 0.02 }
+  return dI
+}
+
+obfunc dfc_options_all(){ local i localobj eD
+  if( numarg()==0 ) eD = dfc_seg_look_options()
+  if( numarg()> 0 ) eD = dfc_seg_look_options($o1)
+
+  eD.match_option	= 5.2
+  eD.alpha = eD.beta = eD.gamma = eD.delta = eD.eta = eD.mF1 = eD.mF2 = eD.pkP = eD.pkPs = 0
+
+  eD.ilog = 1
+  return eD
+}
+
+// rough match to train; 
+// necessary to avoid traces that don't return to baseline
+// also check spikes also appear in axon
+func dfc_trim(){ local i, t0_tail, f1, f2, r1, r2, res localobj eD
+  f1=$1   f2=$2
+
+  eD = dfc_options_all(dfc_eD)
+  eD.eta 		= 1
+  eD.mF2		= 200
+  eD.pkP		= 1500*5
+  eD.pkPs		= 1
+  eD.pkPsA		= 1
+  
+  t0_tail = stim.del + stim.dur		// end of stimulus
+
+  eD.tmin = t0_tail			// compare tails after end stimulus: axon vs tgt
+  r2 = eD.m0( dfc_simL_i.o(1), dfc_tgt_i ) 
+
+  eD.tmin = 0
+  printf( "\n\t >>dfc_trim: DfpwPkdVa_aXe: " )
+  r1 = eD.DfpwPkdVa_aXe(dfc_simL_i,dfc_tgt_i,-1,-1)	// 800=8.90, 400=15.2, 200=30.82, 1500=6.7  
+  
+  res = r1*f1 + r2*f2
+  printf( "\n\t dfc_trim t0_tail %g r1,2 %g %g f1,f2 %g %g ri*fi %g %g\n\t res %g<<\n",\
+  t0_tail, r1,r2, f1,f2, r1*f1, r2*f2, res )
+  return res
+}
+
+//================================================================================
+// match first spike (up to tmax)
+// gamma and delta to match dV and ddV; largely independent of trace length/stim.amp
+// eta scaled by trace length
+//================================================================================
+func dfc_pkbeg(){ local i, tmax, dV_f, eta_f, r1 localobj eD
+  tmax = $1
+  
+  dV_f = 45*2
+  eta_f = 300 + 100/(tmax-stim.del-1.1)	//  A + B/(time from stim.del to base of spike) A=for spike; B for before spike
+
+  eD = dfc_eD //  eD = dfc_options_all(dfc_eD)
+  // eD.mF2	= 200*10
+  eD.mF2        = 6000 * stim.amp       // peak time error proportional to stimulation amplitude  
+  eD.pkP        = 1500*5
+  eD.pkPs	= 1
+  eD.phi	= 600/116/10 	// range_dV/range_V	old=0.4 * 10
+  eD.phi_1 	= 0.5+0.15
+  eD.phi_2 	= 0.45-0.02
+  eD.chi	= 1000/116/100	// range_ddV/range_V 	old=0.02 * 8
+  eD.chi_1  	= 0.5+0.15	
+  eD.chi_2 	= 0.15	
+  if( numarg()>1) eD.chi_2=$2   // adhoc inserted to override
+  eD.phi*=dV_f eD.chi*=dV_f
+
+  eD.eta	= eta_f	
+  // eD.mF2=0   eD.pkP=1000*eta_f	// for initial pop for Naf & KDR parms
+
+  eD.tmax	= tmax
+  printf( "\n\t >>dfc_pkbeg: DfpwPkdVa: " )
+  r1 = eD.DfpwPkdVa(dfc_simL_i.o(0),dfc_tgt_i)	// 800=8.90, 400=15.2, 200=30.82, 1500=6.7  
+  printf( "\n\t dfc_pkbeg: r1 %g \n\t<<\n", r1 )
+  return r1
+}
+
+
+
+//----- ENDVERBATIM-----
+
+strdef  pDE_log_name
+proc pDE_asg(){
+  // hoc pDE gen variables
+  pDE_log_name = "/home/ximi/Projects/ParSims/codes/reduced-passive.pDE_31Jan15-13-35-22.log"
+  pDE_gen_N = 0
+  pDE_Pop_ibest = 0
+  // hoc set variables
+  dfc_PassWgt = 1
+  RmCm_spine_gbar = 0
+  Spine_number = 30000
+  BL_avg = -74.3052
+  BBF = 1.6
+  BBFdelay = 0
+  lambda_f_d = 0.1
+  G_eh = -30
+  celsius = 35
+  aX_iseg_n = 2
+  s0_Gbar_Naf = 500
+  aXh_Gbar_Naf = 500
+  aXi0_Gbar_Naf = 2500
+  aXi1_Gbar_Naf = 3500
+  aXr_Gbar_Naf = 3000
+  aXm_Gbar_Naf = 50
+  gates_n_Naf_i0 = 1
+  vhalf_n_Naf_i0 = -30
+  slope_n_Naf_i0 = -4.8
+  tauA_n_Naf_i0 = 0.01
+  tauG_n_Naf_i0 = 0.8
+  vhalf_h_Naf_i0 = -64
+  slope_h_Naf_i0 = 9.06
+  tauA_h_Naf_i0 = 8
+  tauG_h_Naf_i0 = 0.5
+  gates_n_Naf_i1 = 1
+  vhalf_n_Naf_i1 = -35
+  slope_n_Naf_i1 = -5
+  tauA_n_Naf_i1 = 0.01
+  tauG_n_Naf_i1 = 0.5
+  vhalf_h_Naf_i1 = -67
+  slope_h_Naf_i1 = 9
+  tauA_h_Naf_i1 = 8
+  s0_Gbar_KDR = 200
+  aXh_Gbar_KDR = 200
+  aXi0_Gbar_KDR = 1500
+  aXi1_Gbar_KDR = 2000
+  aXm_Gbar_KDR = 5
+  aXr_Gbar_KDR = 800
+  Gbar_KDR_dslope = 0
+  gates_n_KDR_i1 = 1
+  vhalf_n_KDR_i1 = 2
+  slope_n_KDR_i1 = -13
+  tauA_n_KDR_i1 = 8
+  tauG_n_KDR_i1 = 0.9
+  vhalf_n_KA_i1 = -30
+  slope_n_KA_i1 = -10
+  tauA_n_KA_i1 = 1
+  vhalfD_h_KA_i1 = -35
+  slope_h_KA_i1 = 10
+  tauA_h_KA_i1 = 20
+  Gbar_KA_dslope = 0.008
+  Gbar_h_dslope = 0.008
+  gates_n_h_i0 = 1
+  vhalf_n_h_i0 = -92.07
+  slope_n_h_i0 = 10
+  tauA_n_h_i0 = 100
+  tau0_n_h_i0 = 0.001
+  tauF_n_h_i0 = 0
+  tauG_n_h_i0 = 0.5
+  tauDv_n_h_i0 = 0
+  // hoc fit variables
+  G_Rm = 249.6015548
+  G_cm = 1.235250653
+  G_Ra = 69.23595773
+  Gbar_Naf = 286.8607084
+  Gbar_KDR = 57.37647879
+  Gbar_KA = 13.06152583
+  Gbar_h = 1.829986593
+}
+// log pDE nfeval
+{ printf( "nfeval %g\n", 176 ) }

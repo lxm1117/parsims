@@ -1,0 +1,871 @@
+// Hoc code to read pDE log files
+// assumes previous load_file( "eTrace-p.hoc" )
+
+//================================================================================
+begintemplate iGen
+  public fname, ngen, id, val, fit, best, median, mean, sd, cv, min, max, low, hi
+  public comp_flag, comp_val, iG_comp
+  strdef id, fname
+  objref iG_comp	// comparison parm when comp_flag==1,3
+  proc init(){
+    fname	= $s1
+    ngen	= $2
+    id 		= $s3	// name of variable
+    val		= $4
+    fit 	= 0	// assume it's a set variable
+    if( numarg() > 4 ){
+      fit	= 1	// its a fit variable
+      best	= $5
+      median	= $6
+      mean	= $7
+      sd	= $8
+      cv	= $9
+      min	= $10
+      max	= $11
+      low	= $12
+      hi	= $13
+    }
+    comp_flag	= 0	// 0=no comparison
+    //  comp_val	= 0	// compare value
+    
+  }
+  //----------------------------------------------------------------------
+  public copy
+  obfunc copy(){ local i localobj ig
+    ig = new iGen( fname, ngen, id, val, best, median, mean, sd, cv, min, max, low, hi )
+    ig.fit = fit
+    ig.comp_flag = comp_flag
+    // ig. comp_val = comp_val
+    return ig
+  }
+endtemplate iGen
+
+//================================================================================
+begintemplate iParStat
+  public fname, ngen, id, val, fit, best, median, mean, sdr, cvr, sd, cv, min, max, low, hi
+  public comp_flag, comp_val, iG_comp
+  strdef id, fname
+  objref iG_comp	// comparison parm when comp_flag==1,3
+  proc init(){
+    fname	= $s1
+    ngen	= $2
+    id 		= $s3	// name of variable
+    val		= $4
+    fit 	= 0	// assume it's a set variable
+    if( numarg() > 4 ){
+      fit	= 1	// its a fit variable
+      best	= $5
+      median	= $6
+      sdr	= $7
+      cvr	= $8
+      mean	= $9
+      sd	= $10
+      cv	= $11
+      min	= $12
+      max	= $13
+      low	= $14
+      hi	= $15
+    }
+    comp_flag	= 0	// 0=no comparison
+    //  comp_val	= 0	// compare value
+    
+  }
+  //----------------------------------------------------------------------
+  public copy
+  obfunc copy(){ local i localobj ig
+    ig = new iParStat( fname, ngen, id, val, best, median, mean, sd, cv, min, max, low, hi )
+    ig.fit = fit
+    ig.comp_flag = comp_flag
+    // ig. comp_val = comp_val
+    return ig
+  }
+endtemplate iParStat
+
+//================================================================================
+begintemplate pDE_log
+  public idebug, iPv, eF, pG, y_step, igL, pL_plot, pF, pN, ngen, vDiag, genN_ptrs
+  objref this, sf, iPv, eF, pG, igL, vB, pL_plot, pF, pN, vDiag, genN_ptrs
+  proc init(){
+    idebug = 0
+    tmp = 0
+    sf = new StringFunctions()
+    first_read_gen_parm_line = 1
+
+    y_step = 16
+    igL_order = 0	// order by 0=original 1=cv 2=comp_change
+    ngen = 0
+    pN = new Vector(2)	// gen# of base and compare
+    pF = new str_obj()	// log filename for base (s1) and compare (s2)
+    vDiag = new VBox()
+  }
+  //----------------------------------------------------------------------
+  public label_color
+  func label_color(){ local i, col localobj str, sf
+    str = new str_obj($s1)
+    sf = new StringFunctions()
+    col = 19
+    if( sf.head( str.s1, "Naf", str.s2 )> 0 ) col = 20
+    if( sf.head( str.s1, "Nap", str.s2 )> 0 ) col = 21
+    if( sf.head( str.s1, "KDR", str.s2 )> 0 ) col = 23
+    if( sf.head( str.s1, "KDRa", str.s2 )> 0 ) col = 24
+    if( sf.head( str.s1, "KDRb", str.s2 )> 0 ) col = 25
+    if( sf.head( str.s1, "KA", str.s2 )> 0 ) col = 26
+    if( sf.head( str.s1, "_h", str.s2 )> 0 && sf.head( str.s1, "Naf", str.s2 )< 0 && \
+        sf.head( str.s1, "KA", str.s2 )< 0 && sf.head( str.s1, "KDR", str.s2 )< 0 ) col = 27
+    return col
+  }
+  public load_colors
+  //----------------------------------------------------------------------
+  func load_colors(){
+    pG.color( 19, "lavender" )
+    pG.color( 20, "Tomato" )
+    pG.color( 21, "lightgreen" )
+    pG.color( 22, "Coral" )
+    pG.color( 23, "lightblue" )
+    pG.color( 24, "Cyan" )
+    pG.color( 24, "Aquamarine" )
+    pG.color( 25, "Khaki" )
+    pG.color( 26, "Goldenrod" )
+    pG.color( 27, "lightpink" )
+    return 27
+  }
+  public resort
+  func resort(){ 
+    igL_order=$1
+    plot_igL()
+    return $1
+  }
+  
+  //----------------------------------------------------------------------
+  obfunc sort_igL(){ local i_order localobj iO, iOc
+    i_order = $1
+    iO = new Vector( igL.count )			// for sorting
+    if( igL_order==0 ) for i=0,igL.count-1 iO.x[i]=i
+    if( igL_order==1 ) {
+      iOc = new Vector( igL.count )
+      for i=0, iOc.size-1 iOc.x[i] = igL.o(i).cv
+      iO = iOc.sortindex()
+    }
+    if( igL_order==2 ) {
+      iOc = new Vector( igL.count )
+      for i=0, iOc.size-1 {
+	iOc.x[i] = 0 
+	//	if( igL.o(i).iG_comp.val != 0 )	iOc.x[i] = abs( 100*( igL.o(i).val/igL.o(i).iG_comp.val -1 ))
+	if( igL.o(i).val != 0 )	iOc.x[i] = abs( 100*( igL.o(i).iG_comp.val/igL.o(i).val -1 ))
+      }
+      iO = iOc.sortindex()
+    }
+    return iO
+  }
+  
+  proc set_sorting(){ local i localobj pG, str
+    pG = $o1
+    pG.menu_action( "Sort by type", "resort(0)" )
+    pG.menu_action( "Sort by cv", "resort(1)" )
+    pG.menu_action( "Sort by %change", "resort(2)" )
+  }
+  //--------------------------------------------------------------------------------
+  public show_base_gen
+  func show_base_gen(){ local i, gM localobj str
+    str = new str_obj()
+    eF.chooser("r", "Select log file", "*.log" )
+    if( eF.chooser()){
+      ngen = gM = max_genN( eF.getname( str.s2 ) )
+      vDiag = new VBox()
+      vDiag.intercept(1)
+        xpanel( "Plot generation number" )
+          xlabel( str.sPrint( "logfile >>%s<<", str.s2 ).s1 )
+          xpvalue( str.sPrint("set gen? (0-%d)", gM).s1, &ngen, 0 )
+  	  sprint( str.s2, "read_n_plot(\"%s\", ngen )", str.s2, ngen )
+	  xbutton( "plot it", str.s2 )
+	  xbutton( "Cancel", "vDiag.unmap()" )
+        xpanel() // 1*pxl_cm, 1*pxl_cm )
+    vDiag.intercept(0)
+    vDiag.map( "diag", 1*pxl_cm, 1*pxl_cm, -1, -1 )
+  }
+    return 1
+  }
+  //--------------------------------------------------------------------------------
+  public compare_base_gen
+  func compare_base_gen(){ local i, gM localobj str
+    str = new str_obj()
+    eF.chooser("r", "Select log file to compare", "*.log" )
+    if( eF.chooser()){
+      ngen= gM = max_genN( eF.getname( str.s2 ) )
+      vDiag = new VBox()
+      vDiag.intercept(1)
+        xpanel( "Select generation number" )
+          xlabel( str.sPrint( "logfile >>%s<<", str.s2 ).s1 )
+          xpvalue( str.sPrint("select gen# (0-%d)", gM).s1, &ngen, 0 )
+	  sprint( str.s2, "compare_n_plot(\"%s\", ngen )", str.s2, ngen )
+	  xbutton( "compare them", str.s2 )
+	  xbutton( "Cancel", "vDiag.unmap()" )
+        xpanel() // 1*pxl_cm, 1*pxl_cm )	
+    vDiag.intercept(0)
+    vDiag.map( "diag", 1*pxl_cm, 1*pxl_cm, -1, -1 )
+    }
+    return 1
+  }
+  //----------------------------------------------------------------------  
+  public read_n_plot
+  obfunc read_n_plot(){ local i localobj str, ig1, pL
+    pF.s1 = $s1
+    pN.x[0] = $2
+    pF.s2 = ""
+    pN.x[1] = -1
+    plot_igL( read_iGen( pF.s1, pN.x[0] ))
+    if( vDiag.ismapped() ) vDiag.unmap()
+    return pL_plot
+  }
+
+  //----------------------------------------------------------------------  
+  public compare_n_plot
+  obfunc compare_n_plot(){ local i localobj str, igB, igC
+    pF.s2 = $s1
+    pN.x[1] = $2
+    igB = read_iGen( $s1, $2 )
+    plot_igL( compare_igL( igL, igB ))    
+    if( vDiag.ismapped() ) vDiag.unmap()
+    return pL_plot
+  }
+  
+  //--------------------------------------------------------------------------------
+  public plot_igL
+  obfunc plot_igL(){ local i, lW, xp, yp, yM, ncols, rdiff localobj iG, str, sf, eT, iO, iOc
+    if( numarg() > 0 ) igL = $o1
+    eT = new eTrace()
+    pG = new Graph()
+    load_colors()
+    str = new str_obj()
+    sf = new StringFunctions()
+    
+    //  Match plot scale to pixels on screen
+    pxl_cm = 100/2.7	// 37 pixels per cm
+    margin = 2.2/500*pxl_cm	// pxls; cm per width_pxl * pxl_cm
+    y_step = 16	// pixels
+    yM = 50	// lines per column
+    pLabW = 3.8	* pxl_cm
+    pValW = 4	* pxl_cm
+    limW = 2	* pxl_cm
+    cValW = 0.8 * pxl_cm
+    compW = 5	*pxl_cm
+    ncols = int(igL.count/yM)+1
+    aWidth = pLabW + pValW + limW + cValW + compW
+    wWidth = (ncols * aWidth)*(1+margin)
+    pG.fixed( 1 )
+    
+    //------------------------------
+    pG.unmap()
+    pL_plot = new VBox()
+    pL_plot.intercept(1)
+    xpanel( "read-gen", 1 )
+      xbutton( "plot base gen...", "show_base_gen()" )
+      xbutton( "compare to base gen...", "compare_base_gen()" )
+    xpanel()
+    pG.view( 0, 0, ncols*(aWidth), yM*y_step, 20, 100, wWidth, yM*y_step )
+    pG.yaxis(3)
+    pL_plot.intercept(0)
+    pL_plot.map("plot_igL", 0.3*pxl_cm, 3*pxl_cm, -1, -1 )
+    //------------------------------
+
+    set_sorting( pG )
+    iO = sort_igL( igL_order )
+
+    lcolor = 20
+    for i=0, igL.count-1 {
+      iG = igL.o( iO.x[i] )
+      //      if(i==0) pG.label( 0, -y_step, str.sPrint( "%s %d", iG.fname, iG.ngen).s1 )
+      if(i==0) {
+	pG.label( 0, (yM+3)*y_step, str.sPrint( "BASE: %4d %s", pN.x[0], pF.s1 ).s1 )
+	if( pN.x[1]>=0 ) pG.label( 0, (yM+2)*y_step, str.sPrint( "CMPR: %4d %s", pN.x[1], pF.s2 ).s1 )
+      }
+      xp = int(i/yM)*(aWidth)+pLabW
+      yp = yM*y_step - (i%yM)*y_step	// yM -i*y_step
+      
+      pG.color( 1 )
+      pG.align( 1, 0 )
+      pG.glyph( glyph_1bar( label_color(iG.id)), xp-3, yp, -pLabW, y_step*0.7 )
+      pG.label( xp, yp, str.sPrint( "%s %8.3g ", iG.id, iG.val ).s1)
+      
+      xp0 = xp+pValW+limW
+      xp1 = xp+pValW+limW+cValW+compW/2
+
+      if( iG.comp_flag==1 ){	// parm in both BASE and CMPR
+	if( sf.head( iG.id, "vhalf", str.s5 )>=0 || sf.head( iG.id, "Dv",str.s5 )>=0 ){		// parms in mV
+	  rdiff = iG.iG_comp.val - iG.val
+	  pG.glyph( glyph_1bar(5), xp1, yp, rdiff, y_step*0.7 )
+	  pG.align( 0.5, 0 )
+	  pG.label( xp1, yp, str.sPrint( "%.1f%mV", rdiff ).s1 )
+	}else{
+	  rdiff =0
+	  // if( iG.iG_comp.val != 0 ) rdiff = 100*( iG.iG_comp.val /iG.val - 1 )
+	  if( iG.val != 0 ) rdiff = 100*( iG.iG_comp.val /iG.val - 1 )
+	  if( rdiff != 0 ){
+	    rd = 0.5*eT.min( abs(rdiff), 170 )
+	    rd_sign = abs(rdiff)/rdiff
+	    pG.glyph( glyph_1bar(4), xp1, yp, rd*rd_sign, y_step*0.7 )
+	    if( abs(rdiff)> 170 ) \
+  	      pG.glyph( glyph_1bar(5), xp1+rd*rd_sign-2, yp, 2, y_step*0.7, -25 )
+	    pG.align( 0.5, 0 )
+	    pG.label( xp1, yp, str.sPrint( "%.1f%%", rdiff ).s1 )
+	  }
+	}
+      }
+      if( iG.comp_flag==1 || iG.comp_flag==3 ){
+	if( (iG.comp_flag==1 && iG.val != iG.iG_comp.val) || (iG.comp_flag==3) ){	// Ugly; nrn is not like C
+	  pG.align( 0, 0 )
+	  pG.label( xp0, yp, str.sPrint( "%.3g%", iG.iG_comp.val ).s1 )
+	  pG.glyph( glyph_1bar( label_color(iG.id)), xp0, yp, pxl_cm*0.8, y_step*0.7 )
+	  if( iG.comp_flag==3 ) pG.label( xp0+1.3*pxl_cm, yp, "Parm in CMPR only" )
+	}
+      }
+
+      if( iG.fit && iG.comp_flag < 3 ){
+	pG.align( 0, 0 )
+	pG.label( xp+pValW, yp, str.sPrint( " %.4g:%.4g", iG.low, iG.hi ).s1 )
+	pG.glyph( glyph_fitP( iG, pValW), xp, yp+y_step*0.2 )
+      }
+      if( iG.comp_flag==2 ) {
+	pG.align( 0, 0 )
+	pG.label( xp0, yp, "Parm in BASE only" )
+      }
+    }
+    return pL_plot
+  }
+  
+  //----------------------------------------------------------------------
+  public plot_igL_new
+  obfunc plot_igL_new(){ local i, lW, xp, yp, yM, ncols, rdiff localobj iG, str, sf, eT, iO, iOc
+    if( numarg() > 0 ) igL = $o1
+    eT = new eTrace()
+    pG = new Graph()
+    load_colors()
+    str = new str_obj()
+    sf = new StringFunctions()
+    
+    //  Match plot scale to pixels on screen
+    pxl_cm = 100/2.7	// 37 pixels per cm
+    margin = 2.2/500*pxl_cm	// pxls; cm per width_pxl * pxl_cm
+    y_step = 16	// pixels
+    yM = 50	// lines per column
+    pLabW = 3.8	* pxl_cm
+    pValW = 4	* pxl_cm
+    limW = 2	* pxl_cm
+    cValW = 0.8 * pxl_cm
+    compW = 5	*pxl_cm
+    ncols = int(igL.count/yM)+1
+    aWidth = pLabW + pValW + limW + cValW + compW
+    wWidth = (ncols * aWidth)*(1+margin)
+    pG.fixed( 1 )
+    
+    //------------------------------
+    pG.unmap()
+    pL_plot = new VBox()
+    pL_plot.intercept(1)
+    xpanel( "read-gen", 1 )
+      xbutton( "plot base gen...", "show_base_gen()" )
+      xbutton( "compare to base gen...", "compare_base_gen()" )
+    xpanel()
+    pG.view( 0, 0, ncols*(aWidth), yM*y_step, 20, 100, wWidth, yM*y_step )
+    pG.yaxis(3)
+    pL_plot.intercept(0)
+    pL_plot.map("plot_igL", 0.3*pxl_cm, 3*pxl_cm, -1, -1 )
+    //------------------------------
+
+    set_sorting( pG )
+    iO = sort_igL( igL_order )
+
+    lcolor = 20
+    for i=0, igL.count-1 {
+      iG = igL.o( iO.x[i] )
+      if(i==0) {
+	pG.label( 0, (yM+3)*y_step, str.sPrint( "BASE: %4d %s", pN.x[0], pF.s1 ).s1 )
+	if( pN.x[1]>=0 ) pG.label( 0, (yM+2)*y_step, str.sPrint( "CMPR: %4d %s", pN.x[1], pF.s2 ).s1 )
+      }
+
+      xp = int(i/yM)*(aWidth)+pLabW
+      yp = yM*y_step - (i%yM)*y_step	// yM -i*y_step
+      
+      plot_iG_val( iG, xp, yp )
+    }
+    return igL
+  }
+  
+  //----------------------------------------------------------------------
+  obfunc plot_iG_val(){ local xp, yp localobj iG, str
+    { iG=$o1 xp=$2 yp=$3 }
+    str = new str_obj()
+
+    { pG.color( 1 ) pG.align( 1, 0 ) }
+    pG.label( xp, yp, str.sPrint( "%s %8.3g ", iG.id, iG.val ).s1 )
+    pG.glyph( glyph_1bar( label_color(iG.id)), xp-3, yp, -pLabW, y_step*0.7 )
+    
+    if( iG.fit ){
+      pG.align( 0, 0 )
+      pG.label( xp+pValW, yp, str.sPrint( " %.4g:%.4g", iG.low, iG.hi ).s1 )
+      pG.glyph( glyph_fitP( iG, pValW), xp, yp+y_step*0.2 )
+    }
+    return iG
+  }
+  //----------------------------------------------------------------------  
+  public glyph_1bar
+  obfunc glyph_1bar(){ local i, xw, yh, color localobj g
+    color = $1
+    g = new Glyph()
+    g.path() g.m(0,0) g.l(1,0) g.l(1,1) g.l(0,1) g.close() g.fill(color)
+    return g
+  }
+  //----------------------------------------------------------------------
+  public glyph_fitP
+  obfunc glyph_fitP(){ local i, xM localobj p, g, eT
+    p = $o1
+    xM = $2
+    g = new Glyph()
+    eT = new eTrace()
+    g.path() g.m(0,0) g.l(xM,0) g.s(1,2)	// axis
+    
+    xp = eT.min( p.cv/100*xM, 140/100*xM )
+    g.path() g.m(0,0) g.l(0,5) g.l(0+xp,5) g.l(0+xp,0) g.close() g.fill(21)
+    if( p.cv>140) { g.path() g.m(xp-3,-3) g.l(xp,7) g.s(21,2) }
+    
+    xp = (p.min-p.low)/(p.hi-p.low)*xM    
+    g.path() g.m(xp+3,5) g.l(xp,0) g.l(xp+3,-5) g.s(1,1)	// left arrow
+    xp = (p.max-p.low)/(p.hi-p.low)*xM    
+    g.path() g.m(xp-3,5) g.l(xp,0) g.l(xp-3,-5) g.s(1,1)	// right arrow
+
+    xp = (p.val-p.low)/(p.hi-p.low)*xM				// val
+    g.path() g.m(xp,7) g.l(xp,-7) g.s(2,2)
+
+    xp = (p.median-p.low)/(p.hi-p.low)*xM
+    g.path() g.m(xp,5) g.l(xp,-5) g.s(3,2)
+    xp = (p.mean-p.low)/(p.hi-p.low)*xM
+    g.path() g.m(xp,5) g.l(xp,-5) g.s(5,2)
+    
+    return g
+  }
+  
+  //--------------------------------------------------------------------------------
+  public compare_igL
+  obfunc compare_igL(){ local ia, ib localobj igA, igB, ig, igN, bV, igAc
+    igAc = $o1
+    igB = $o2
+    igN = new List()
+    bV = new Vector( igB.count, 0 )	// to find ib's not in A
+    
+    // first, ge rid of possible comparisons values not in A
+    igA = new List()
+    for ia=0, igAc.count-1 if( igAc.o(ia).comp_flag!=3 ) igA.append( igAc.o(ia).copy() )
+
+    for ia=0, igA.count-1 {
+      ig = igA.o(ia).copy()
+      for ib=0, igB.count-1 {
+	if( ig.id == igB.o(ib).id ) break
+      }
+      if( ib < igB.count ){		//found match
+	ig.comp_flag = bV.x[ib] = 1
+	ig.iG_comp = igB.o(ib).copy
+	sprint( ig.fname, "%s-%d %s-%d", igA.o(ia).fname, igA.o(ia).ngen, igB.o(ib).fname, igB.o(ib).ngen )
+	//ig.comp_val = igB.o(ib).val
+      }else{ 				//no match
+	ig.comp_flag = 2		// parm ia not found in igB
+	sprint( ig.fname, "%s-%d ???-??", igA.o(ia).fname, igA.o(ia).ngen )
+	ig.iG_comp = new iGen( "", -1, "", 0 )
+	// ig.comp_val = 0
+      }
+      ig.ngen = -1
+      igN.append( ig )
+    }
+    for ib=0, bV.size-1 if( bV.x[ib]==0 ) {
+      ig = new iGen( "", -1, igB.o(ib).id, 0 )
+      ig.comp_flag = 3			// parm ib not found in igA
+      sprint( ig.fname, "???-? %s-%d", igB.o(ib).fname, igB.o(ib).ngen )
+      ig.ngen = -1
+      ig.iG_comp = igB.o(ib).copy()
+      igN.append( ig )
+    }
+    return igN
+  }
+  //--------------------------------------------------------------------------------
+  // Try substituting OPT home dir with axon home dir
+  public try_subs_path
+  func try_subs_path(){ local i localobj str, sf, str2
+    str = $o1
+    str2 = new str_obj( )
+    sprint( str2.s2, "perl -e '$_=\"%s\";s|/home/ohu0256|/axon/d1/Users/jose|;print $_'", str.s1 )
+    str.nsystem( str2.s2, str2.s3 )
+    eF = new File()
+    if( eF.ropen( str2.s3 )==0 ){
+      system( str2.sPrint( "ls -lt %s", str2.s3).s1 )
+      printf( "read_gen_parm_line:try_subs_path: file >>%s<< not found\n", str2.s3 )
+      return 0
+    }else{
+      pF.s1 = str2.s3
+      return 1
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  // return 1==OK, 0==ERROR, -1=End
+  public read_gen_parm_line
+  func read_gen_parm_line_old(){ local ngen, strl localobj str
+    str = new str_obj( $s1 )
+    ngen = $2
+    if( first_read_gen_parm_line ){
+      eF = new File()
+      if( eF.ropen( str.s1 ) == 0 ){
+	if( try_subs_path( str ) == 0 ){
+	  printf( "read_gen_parm_line: file >>%s<< not found\n", str.s1 )
+	  return -1
+	}
+      }
+      sprint( str.s2, "^end_nextGen gen_N %4d ", ngen )
+      strl = eF.gets( str.s3 )
+      while( strl>=0 && sf.head( str.s3, str.s2, str.s4 )<0 ) strl=eF.gets(str.s3)
+      if( strl<0 ){
+	printf( "read_gen_parm_line: generation %d not found\n", ngen )
+	return -1
+      }
+      if( idebug ) printf( "found gen %d tell %d >>%s<<\n", ngen, eF.tell(), str.s3 )
+      strl = eF.gets( str.s3 )
+      while( strl>=0 && sf.head( str.s3, "Fit-parm", str.s4 )<0 ) strl=eF.gets(str.s3)
+      if( strl<0 ){
+	printf( "read_gen_parm_line: unexpected error looking for >>Fit-parm<< line\n" )
+	return -1
+      }
+      first_read_gen_parm_line = 0
+    }
+    // printf( "found gen %d tell %d\n>>%s<<\n", ngen, eF.tell(), str.s3 )
+    strl = eF.gets( str.s3 )
+    while( strl>=0 && sf.head( str.s3, "^------", str.s4 )>=0 ) strl=eF.gets(str.s3) // skip line
+    if( strl>=0 && sf.head( str.s3, "elapsed", str.s4 )<0 ) { 
+      $s3 = str.s3 
+      return 1
+    }else{
+      first_read_gen_parm_line = 1
+      eF.close()
+      return -1
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  public openF
+  obfunc openF(){ local i localobj str
+    str = new str_obj( $s1 )
+    eF = new File()
+    if( eF.ropen( str.s1 ) == 0 ){
+      if( try_subs_path( str ) == 0 ){
+	printf( "read_gen_parm_line: file >>%s<< not found\n", str.s1 )
+      }
+    }
+    return eF
+  }
+
+  //--------------------------------------------------------------------------------
+  // return 1==OK, 0==ERROR, -1=End
+  public read_gen_parm_line
+  func read_gen_parm_line(){ local ngen, strl localobj str
+    str = new str_obj( $s1 )
+    ngen = $2
+    if( first_read_gen_parm_line ){
+      if( object_id( eF )==0 ) {				// file has not been opened
+	printf( "rgpl: opening file >>%s<<\n", str.s1 )
+	openF( str.s1 )
+	set_genN_ptrs( eF )
+      }else{
+	if( sf.substr( str.s1, eF.getname()) < 0  ){	// file change
+	  printf( "rgpl: closing and reopening file >>%s<<\n", str.s1 )
+	  eF.close() 
+	  openF( str.s1 )
+	  set_genN_ptrs()
+	}
+      }
+      if( ngen > genN_ptrs.size-1 ){
+	printf( "read_gen_parm_line: generation %d not found\n", ngen )
+	return -1
+      }
+  
+      eF.seek( genN_ptrs.x[ ngen] )
+      //  printf( "rgpl: tell %d\n", eF.tell() )
+      first_read_gen_parm_line = 0
+    }
+    strl = eF.gets( str.s3 )
+    // for some reason sf.head below crashes with segmentation violation sometimes
+    // while( strl>=0 && sf.head( str.s3, "^----------", str.s4 )>=0 ) strl=eF.gets(str.s3) // skip line
+    while( strl>=0 && sf.substr( str.s3, "---------", str.s4 )>=0 ) strl=eF.gets(str.s3) // skip line
+    if( strl>=0 && sf.head( str.s3, "elapsed", str.s4 )<0 ) { 
+      // printf( "rgpl: returned line >>%s<<\n", str.s3 )
+      $s3 = str.s3 
+      return 1
+    }else{
+      // printf( "rgpl: Done with gen %d\n", ngen )
+      first_read_gen_parm_line = 1
+      return -1
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  public read_iGen
+  obfunc read_iGen(){ local i, sval, ngen, val, bst, med, sdr, cvr, mean, sd, cv, min, max, low, hi localobj str, igL
+    str = new str_obj( $s1 )		// s1=filename, s2-s5 tmp-strs
+    ngen = $2
+    sdr = cvr =0
+    igL = new List()
+    //    iPv = new vList()
+    while( (rval = read_gen_parm_line( str.s1, ngen, str.s2 )) > 0 ){
+      sval = sscanf( str.s2, "%s %g", str.s3, &val ) 
+      if( idebug )printf( "read_iGen: s3 %s val %g sval %g\n", str.s3, val, sval )
+
+      sval = sscanf( str.s2, "%*s %*g %g %g %g %g %g %g %g %g %g %g:%g", \
+                     &bst, &med, &sdr, &cvr, &mean, &sd, &cv, &min, &max, &low, &hi )
+      // cases                          1 2   3    4   5    6   7   8   9   10  11      in above sscanf
+      // 0 Set-var:         varid val							sval -1
+      // 1 Fit-var-new-fmt: varid val bst med sdr  cvr mean sd  cv  min max low:hi	sval 11 
+      // 2 Costs-new-fmt:  costid val bst med sdr  cvr mean sd  cv  min max		sval 9 set low=min hi=max
+      // 3 Fit-var-old-fmt: varid val bst med mean sd  cv   min max low:hi		sval 8 set sdr=sd cvr=cv
+      //3.1 Fit-var-old-fmt varid val bst med H mean sd cv  min max low:hi		sval 2 set sdr=sd cvr=cv
+      // 4 Costs-old-fmt:   varid val bst med mean sd  cv   min max 			sval 7 plus low=min hi=max
+      
+      if( idebug ) printf( "read_iGen: sval %d %s val %g %g med %g %g %g mean %g %g %g min %g %g %g %g\n",\
+          sval, str.s3, val, bst, med, sdr, cvr, mean, sd, cv, min, max, low, hi )
+      
+      if(  sval!=-1 && sval!=2 && sval!=11 && sval!=9 && sval!=8 && sval!=7 ){
+	printf( "\t\tread_iGen: WARNING: Unrecognized log line >>%s<< IGNORED\n", str.s2 )
+        printf( "read_iGen: sval %d %s val %g %g med %g %g %g mean %g %g %g min %g %g %g %g\n",\
+          sval, str.s3, val, bst, med, sdr, cvr, mean, sd, cv, min, max, low, hi )
+	continue 
+      }
+      if( sval == 9 ) { low=min hi=max } // cost-totals have no lo:hi field
+
+      if( sval == 8 || sval == 7 ) { 
+	sval = sscanf( str.s2, "%*s %*g %g %g %g %g %g %g %g %g:%g", \
+                     &bst, &med, &mean, &sd, &cv, &min, &max, &low, &hi )
+        if(  sval!=7 && sval!=9 ){
+	  printf( "\t\tread_iGen: WARNING 2: Unrecognized log line >>%s<< IGNORED\n", str.s2 )
+	  continue 
+	}
+        sdr=sd cvr=cv
+        if( sval==7 ) { low=min hi=max }
+      }
+
+      if( sval == 2 ) {
+	sval = sscanf( str.s2, "%*s %*g %g %g H %g %g %g %g %g %g:%g", \
+                      &bst, &med, &mean, &sd, &cv, &min, &max, &low, &hi )
+        if(  sval!=9 ){
+	  printf( "\t\tread_iGen: WARNING 3: Unrecognized log line >>%s<< IGNORED\n", str.s2 )
+	  continue 
+	}
+        sdr=sd cvr=cv
+      }
+
+      if( sval <= 0 ) igL.append( new iParStat( str.s1, ngen, str.s3, val ))
+      if( sval >  0 ) igL.append( new iParStat( str.s1, ngen, str.s3, val, bst, med, sdr, cvr, mean, sd, cv, min, max, low, hi ))
+
+      if( idebug ) {
+	printf( "read_iGen: %s %g ", str.s3, val )
+	if( sval > 2 ) printf( "bst %g med %g sdr %g cvr %g mean %g sd %g cv %g min %g max %g lo %g hi %g", \
+                               bst, med, sdr, cvr, mean, sd, cv, min, max, low, hi )
+	printf( "\n" )
+      }
+    }
+    return igL
+  }
+  //----------------------------------------------------------------------
+  public max_genN
+  func max_genN(){ local i, go_on, nmax localobj str
+    str = new str_obj( $s1 )
+    
+    openF( str.s1 )
+    return set_genN_ptrs( eF )
+  }
+
+  func max_genN_old(){ local i, go_on, nmax localobj str, aF, sf
+    str = new str_obj( $s1 )
+    sf = new StringFunctions()
+    aF = new File()
+    if( aF.ropen( str.s1 ) == 0 ){
+      printf( "read_gen_parm_line: file >>%s<< not found\n", str.s1 )
+      return -1
+    }
+    nmax=0 go_on=1
+    while( 1 ){
+      nmax+=1
+      sprint( str.s2, "^end_nextGen gen_N %4d ", nmax )
+      strl = aF.gets( str.s3 )
+      while( strl>=0 && sf.head( str.s3, str.s2, str.s4 )<0 ) strl=aF.gets(str.s3)
+      if( strl<0 ) break
+    }	
+    aF.close()
+    return nmax-1
+  }
+
+  //----------------------------------------------------------------------
+  public set_genN_ptrs
+  func set_genN_ptrs(){ local i, go_on, ngen localobj str, aF
+    aF = $o1
+    aF.tell( 0 )
+    str = new str_obj()
+    genN_ptrs=new Vector() 
+    genN_ptrs.append(0)	// gen 0 is not well defined; skip
+    ngen=0 go_on=1
+    while( 1 ){
+      ngen+=1
+      sprint( str.s2, "^end_nextGen gen_N %4d ", ngen )
+      strl = aF.gets( str.s3 )
+      while( strl>=0 && sf.head( str.s3, str.s2, str.s4 )<0 ) strl=aF.gets(str.s3)
+      if( strl<0 ){	// done; EOF
+	break
+      }
+      if( idebug ) printf( "found gen %d tell %d >>%s<<\n", ngen, aF.tell(), str.s3 )
+      strl = aF.gets( str.s3 )
+      while( strl>=0 && sf.head( str.s3, "Fit-parm", str.s4 )<0 ) strl=aF.gets(str.s3)
+      if( strl<0 ){
+	printf( "read_gen_parm_line: unexpected error looking for >>Fit-parm<< line\n" )
+	return -1
+      }
+      // printf( "set_genN_ptrs: gen %d at %d\n>>%s<<\n", ngen, aF.tell(), str.s3 )
+      genN_ptrs.append( aF.tell() )
+    }	
+    // printf( "return ngen %d\n", ngen-1 )
+    return ngen-1
+  }
+
+  //----------------------------------------------------------------------
+  // create file logf-g{ngen}cbest.hoc with values for the best pop member in generation ngen of logfile logf
+  public save_genN_cbest //( logf, ngen )
+  obfunc save_genN_cbest(){ local i, ngen localobj str
+    str = new str_obj( $s1 )
+    ngen = $2
+    str.nsystem( "pwd", str.s2 )
+    sprint( str.s1, "%s/%s", str.s2, str.s1 )
+    if( idebug ) printf( "save_genN_cbest: reading %d from >>%s<<\n", ngen, str.s1 )
+    igL = read_iGen( str.s1, ngen )
+    //    for i=0, igL.count-1 printf( "%s = %.10g\n", igL.o(i).id, igL.o(i).val )
+    sprint( str.s2, "// inserted by pDE_log save_genN_cbest" )
+    sprint( str.s2, "%s\npDE_asg()\nproc pDE_asg(){", str.s2 )	// We call pDE_asg() to get other values not in igL set
+    sprint( str.s2, "%s\npDE_log_name =\\\"%s\\\"\n  pDE_gen_N=%d", str.s2, str.s1, ngen )
+
+    for i=0, igL.count-1 {
+      if( strcmp( "cost-total", igL.o(i).id ) == 0 ) break	// no more simultation variables
+      sprint( str.s2, "%s\n  %s=%.10g", str.s2, igL.o(i).id, igL.o(i).val )
+    }
+    //  for i=0, igL.count-1 sprint( str.s2, "%s\n  %s=%.10g", str.s2, igL.o(i).id, igL.o(i).val )
+
+    sprint( str.s2, "%s\n}\n\nproc pDE_do_all", str.s2 )
+    if( idebug ) printf( "save_genN_cbest: >>%s<<\n" ,str.s2 )  
+    
+    sprint( str.s3, "cat %s-cbest.hoc | perl -e '$asg=\"%s\";$pd=\"proc pDE_do_all\";while(<>){s/$pd/$asg/; print $_}' > %s-g%d-cbest.hoc", str.s1, str.s2, str.s1, ngen )
+    if( idebug ) printf( "save_genN_cbest: s3 >>%s<<\n", str.s3 )
+    system( str.s3 )
+    
+    return igL
+  }
+  //----------------------------------------------------------------------
+  // create file logf-g{ngen}.csv with values for the generation ngen of logfile logf
+  public save_genN //( logf, ngen )
+  obfunc save_genN(){ local i, option, ngen localobj str, iL, eF
+    str = new str_obj( $s1 )
+    ngen = $2
+    option = 0
+    if( numarg() > 2 ) option=$3
+    if( idebug ) printf( "save_genN_cbest: reading %d from >>%s<<\n", ngen, str.s1 )
+    igL = read_iGen( str.s1, ngen )
+    eF = new File()
+    eF.wopen( str.sPrint( 2, "%s-gen%d.csv", str.s1, ngen).s2 )
+    
+    if( option == 0 ){
+      eF.printf( "%s %d\n", str.s1, ngen )
+      eF.printf( "parm_id, best, median, mean, sd, cv, min, max, low, hi\n" )
+      for i=0, igL.count-1 {
+	iL = igL.o(i)
+	eF.printf( "%s, %.10g", iL.id, iL.val )
+	if( iL.fit ) eF.printf( ", %.10g, %.10g, %.10g, %.10g, %.10g, %.10g, %.10g, %.10g", \
+	iL.median, iL.mean, iL.sd, iL.cv, iL.min, iL.max, iL.low, iL.hi )
+	eF.printf( "\n" )
+      }
+    }
+    if( option == 1 ){ // print set var first and fit var after
+      eF.printf( "%s %d\n", str.s1, ngen )
+      eF.printf( "parm_id, best, median, mean, sd, cv, min, max, low, hi\n" )
+      for i=0, igL.count-1 if( igL.o(i).fit==0 ) eF.printf( "%s, %.10g\n", igL.o(i).id, igL.o(i).val )
+      for i=0, igL.count-1 {
+	if( igL.o(i).fit==0 ) continue
+	iL = igL.o(i)
+	eF.printf( "%s, %.10g, %.10g, %.10g, %.10g, %.10g, %.10g, %.10g, %.10g, %10g\n", \
+	iL.id, iL.val, iL.median, iL.mean, iL.sd, iL.cv, iL.min, iL.max, iL.low, iL.hi )
+      }
+    }
+    eF.close()
+    return igL
+  }
+endtemplate pDE_log
+
+/*
+================================================================================
+Usage
+
+objref ig1, ig2, igL
+strdef pDE_log_name
+obfunc plot_gen(){
+  igL = new pDE_log()
+  ig1 = igL.read_iGen( pDE_log_name, pDE_gen_N )
+  igL.plot_igL( ig1 )
+  return ig1
+}
+
+================================================================================
+
+objref eL, str, sf, eL2, dL, pG, igL, ig2, ig1, igC
+
+eL = new pDE_log()
+// ig1 = eL.read_iGen( "test.log", 3 )
+// ig1 = eL.read_iGen( "x13-080106a-n420+aX+h+Naf+s+KA+KDRa_bAP.pDE_25Apr08-15-56-17.log", 160 )
+// ig2 = eL.read_iGen( "x13-080106a-n420+aX+h+Naf+s+KA+KDRa_bAP.pDE_25Apr08-15-56-17.log", 180 )
+
+//ig1 = eL.read_iGen( "../x13-long-train/x13-080106a-n420+aX+Fix2-h+Naf+KA+KDRa_i1-DfpwdV-htf-oscBale-v2.pDE_20Nov07-16-26-59.log", 275 )
+//ig1 = eL.read_iGen( "../x13-long-train/x13-080106a-n420+aX+Fix2-h+Naf+KA+KDRa_i1-DfpwdV-htf-oscBale-v2.pDE_16Nov07-17-06-24.log", 476 )
+//ig1 = eL.read_iGen( "../x13-long-train/x13-080106a-n420+aX+Fix2-h+Naf+KA+KDRa_i1-DfpwdV-htf.pDE_31Oct07-20-08-05.log", 750 )
+//ig1 = eL.read_iGen( "../x13-long-train/x13-080106a-n420+aX+Fix2-h+Naf+KA+KDRa_i1-DfpwdV-htf.pDE_31Oct07-19-05-07.log", 51 )
+// eL.plot_igL( ig1 )
+// abort()
+
+//ig1 = eL.read_iGen( "x13-080106a-n420+aX+h+Naf+s+KA+KDRa_bAP.pDE_29Apr08-11-20-00.log", 195 )
+// ig1 = eL.read_iGen( "x13-080106a-n420+aX+h+Naf+s+KA+KDRa_bAP.pDE_25Apr08-15-56-17.log",  280 )
+// ig2 = eL.read_iGen( "x13-080106a-n420+aX+h+Naf+s+KA+KDRa_bAP.pDE_21Apr08-17-03-18.log",  430 )
+
+//ig1 = eL.read_iGen( "../x13-080106a/x13-080106a-n420-Passive.pDE_15Apr08-16-05-02.log", 50 )
+//ig2 = eL.read_iGen( "../x13-080106a/x13-080106a-n420+Fix-h+Naf+KDR.pDE_05May08-15-22-36.log", 135 )
+
+ig1 = eL.read_iGen( "../x13-080106a/x13-080106a-n420+Fix-h+Naf+KDR.pDE_06May08-13-04-25.log", 15 )
+
+//igC = eL.compare_igL( ig2, ig1 )
+eL.plot_igL( ig1 )
+
+//pG = new Graph()
+//pG.glyph( eL.glyph_fitP( eL.igL.o(8) ), 50, 50 )
+
+abort()
+
+objref tS, str, tSr
+proc tS_do(){ 
+  if( numarg() == 2 ) tSr = tS.split( $s1, $s2 )
+  if( numarg()  > 2 ) tSr = tS.split( $s1, $s2, 1 )
+  printf( ">>>begin<<<\n")
+  for i=0,tSr.count-1 printf( "%d >>%s<<\n", i, tSr.o(i).s1 )
+  printf( ">>>done<<<\n")
+}
+
+proc test_split(){ 
+  tS = new pDE_log()
+  tS_do( " a\tb\nc\td\n", "[ \t\n]" )
+  tS_do( " a\tb\nc\td\n", "[ \t\n]", 1 )
+  
+  tS_do( "a\tb\nc\td", "[ \t\n]" )
+  tS_do( "a\t   b\nc\td  ", "[ \t\n]" )
+  tS_do( "\ta\t\t   b\nc\td  ", "[ \t\n]" )
+  tS_do( "      a     b   c   d  ", "[ \t\n]" )
+  tS_do( "      a     b   ckk   d  ", " " )
+  tS_do( "      ab\nb   ckk   d  ", " " )
+}
+
+test_split()
+*/

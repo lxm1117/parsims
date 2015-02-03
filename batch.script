@@ -2,14 +2,14 @@
 
 #PBS -q shared
 #PBS -N parsims
-#PBS -l nodes=1:ppn=16
+#PBS -l nodes=2:ppn=32
 #PBS -o job_output
 #PBS -e error_output
 #PBS -V
 #pBS -M xl285608@ohio.edu
 #PBS -m abe
 #PBS -A csd403
-#PBS -l walltime=00:59:59
+#PBS -l walltime=06:50:00
 
 LOG="reduced-passive.pDE"
 iRun=1
@@ -21,7 +21,13 @@ iRun=1
 #done
 
 cd /oasis/scratch/trestles/$USER/temp_project
+#rm -rf codes
+
+cd $HOME/Projects/ParSims
+cp -r codes /oasis/scratch/trestles/$USER/temp_project
+cd /oasis/scratch/trestles/$USER/temp_project/codes
+
 
 LOG=$LOG-$iRun.log
 LOGE=${LOG}E
-mpirun_rsh -np 16 -hostfile $PBS_NODEFILE /home/ximi/Projects/ParSims/pDEdir/pDE /home/ximi/Projects/ParSims/reduced-passive.pDE #$LOG > $LOGE 2>&1 &
+/opt/mvapich2/gnu/ib/bin/mpirun_rsh -np 64 -hostfile $PBS_NODEFILE $PWD/pDEdir/pDE $PWD/reduced-passive.pDE # $LOG > $LOGE 2>&1 &

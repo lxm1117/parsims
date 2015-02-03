@@ -1,0 +1,4386 @@
+/* ================================================================================
+   Operations on Traces
+  ================================================================================ */
+
+eTrace_loaded_ = 1	//- USE load_file( "eTrace-p.hoc", "eTrace_loaded" ) to avoid multiple loadings
+
+//================================================================================
+// Initialize to steady state by iterating in negative time (see NEURON Book).
+begintemplate initss
+  public cvode, v_init, idebug, t0, dt0, t1, dt1, t2, dt2, T, V, G, dV, sd
+  objref T, V, G, cvode
+  proc init(){
+    cvode = $o1
+    v_init	= -65
+    if( numarg() > 1 ) v_init = $2
+    
+    idebug 		= 0
+    t2 			= 1e9	// start at time -t2-t1-t0. finish at t=0 
+    dt2 		= 1e8	//   iterate each with dt2, dt1 and dt0 respectively
+    t1 			= 1e7 //100
+    dt1 		= 1e3//0.1
+    t0 			= 15//30 
+    dt0 		= 0.01//0.1
+    
+    // dV = maximal variation in t0 window
+    // sd = SD in t0 window
+  }
+  
+  public init_steady_state
+  proc init_steady_state(){ local dtsav, was_active
+    if( idebug > 1 ) {
+      sprint( tstr, "%s", G )
+      if( 0 == strcmp( tstr, "NULLobject" )) G = new Graph()
+      printf( "initss t %g dt %g tstop %g cvode %g\n", t, dt, tstop, cvode.active() )
+    }
+    
+    it0 = -1 * t0
+    it1 = -1*( t0 + t1 )
+    it2 = -1*( t0 + t1 + t2 )
+    
+    finitialize( v_init )		
+    dtsav	= dt				// record dt and cvode state
+    was_active  = cvode.active()
+    t     = it2
+    dt	= dt2
+    cvode.active( 0 )
+    while( t < it1 ) { 
+      if( idebug > 1 ) {
+	printf( "s1 %g %g\n", t, v )
+	G.mark( t, v )
+      }
+      fadvance()
+    } 
+  
+    /*
+    if( idebug > 1 ) printf( "initss Done s1 t %g v %g\n", t, v )
+    dt  = dt1
+    cvode.active( 1 )
+    cvode.atol(1.e-3)
+    while( t < it0 ) { 
+      if( idebug > 1 ) {
+	printf( "s2 %g %g\n", t, v )
+	G.mark( t, v )
+      }
+      fadvance() 
+    }
+    if( idebug > 1 ) printf( "initss Done s2 t %g v %g\n", t, v )
+    */
+ 
+    T = new Vector()
+    V = new Vector()
+    cvode.active( 0 )
+    dt = dt0
+    t = it0
+    while( t < 0 ){
+      if( idebug > 1 ) printf( "s3 %g %g\n", t, v )
+      T.append( t )
+      V.append( v )
+      fadvance()
+    }
+    if( idebug > 1 ) V.line( G, T )
+    
+    dV = V.max() - V.min()
+    sd = V.stdev()/sqrt( dt0 )
+    
+    if( idebug > 0 ) printf( "initss Done s3 t %g v %g dV %g SD %g\n", t, v, dV, sd )
+
+    cvode.active( was_active )		// restore cvode and dt state
+    dt  = dtsav
+    t   = 0
+    
+    if( cvode.active() ) {
+      cvode.re_init()
+    } else {
+      fcurrent()
+    }
+    frecord_init()
+  }
+endtemplate initss
+
+//================================================================================
+begintemplate Stat
+  public id, n, x, avg, sd, cv, min, max
+  strdef id
+  proc init(){
+    if( numarg()>0 ) id = $s1
+    n = avg = S = cv = 0
+    min = 1e60
+    max = -1e60
+  }
+  public push
+  proc push(){ local avgm1
+    x = $1
+    n += 1
+    if( x > max ) max = x
+    if( x < min ) min = x
+    if( n==1 ){
+      avg = x
+      S = 0
+    } else {
+      avgm1 = avg
+      avg = avgm1 + (x - avgm1)/n
+      S = S + (x - avgm1) * (x - avg)
+    }
+    if( n>1 ) {
+      sd = sqrt( S/(n-1) )
+      if( avg != 0.0 ) cv = sd / avg
+    }
+  }
+endtemplate Stat
+  
+//================================================================================
+begintemplate str_obj
+  public s1, s2, s3, s4, s5, sres, aN, aS, idebug
+  strdef s1, s2, s3, s4, s5, sres, stmp
+  objref this, aN, aS, SF
+  proc init(){
+    if( numarg() > 0 ) s1 = $s1
+    if( numarg() > 1 ) s2 = $s2
+    if( numarg() > 2 ) s3 = $s3
+    if( numarg() > 3 ) s4 = $s4
+    if( numarg() > 4 ) s5 = $s5
+    idebug = 0
+    SF = new StringFunctions()
+  }
+  //----------------------------------------------------------------------
+  public copy
+  obfunc copy(){ local i localobj sN
+    sN = new str_obj()
+    sN.s1 = s1
+    sN.s2 = s2
+    sN.s3 = s3
+    sN.s4 = s4
+    sN.s5 = s5
+    return sN
+  }    
+
+  // === split( s1 [, seps] ) returns a list of str_objs using seps to split s1
+  // default seps=[ \t\n\r] is whitespace
+  public split
+  obfunc split(){ local i localobj so, sf, sL
+    so = new str_obj( $s1 )
+    so.s2 = "[ \t\n\r]"		// default seps
+    if( numarg()>1 ) so.s2 = $s2
+    sf = new StringFunctions()
+    sL = new List()
+    while( sf.head( so.s1, so.s2, so.s3 ) >= 0 ){
+      if(sf.len(so.s3)>0 ) sL.append( new str_obj( so.s3 ))
+      sf.tail( so.s1, so.s2, so.s1 )
+    }
+    if( sf.len(so.s1) > 0 ) sL.append( new str_obj( so.s1 ))
+    return sL
+  }
+
+  public nsystem  // remove nl from system result
+  func nsystem(){ local sret localobj sf_
+    sf_ = new StringFunctions()
+    sret = system( $s1, $s2 )
+    if( sf_.substr( $s2, "\n" ) > 0 )  sf_.head( $s2, "\n", $s2 )
+    return sret
+  }
+  
+  public substr // ( "substr" [,i] ) return value of SF.substr( si, "substr" ). i=1 Default.
+  func substr(){ 
+    if( numarg()==1 ) return SF.substr( s1, $s1 )
+    sprint( stmp, "stmp = s%d", $2 )
+    execute( stmp, this )
+    return SF.substr( stmp, $s1 )
+  }
+  
+  public system // ( format, sprint-parameters ... )
+  proc system(){ local i
+    stmp = ""
+    aN = new Vector( numarg() )	// for numeric args
+    aS = new List()		// for string args
+    for i=2, numarg(){
+      aS.append( new str_obj(""))
+      if( argtype(i) == 0 ) {
+	aN.x[i-2] = $i 	sprint( stmp, "%s, aN.x[%d]", stmp, i-2 )
+      }
+      if( argtype(i) == 2 ) {
+	aS.o(i-2).s1 = $si sprint( stmp, "%s, aS.o(%d).s1", stmp, i-2 )
+      }
+      if( idebug ) printf( "system stmp >>%s<<\n", stmp )
+    }
+    sprint( stmp, "sprint( stmp, \"%s\" %s )", $s1, stmp )
+    if( idebug ) printf( "stmp >>%s<<\n", stmp )
+    execute( stmp, this )
+    if( idebug ) printf( "stmp >>%s<<\n", stmp )
+    sprint( stmp, "system( \"%s\", %s.sres )", stmp, this )
+    if( idebug ) printf( "stmp >>%s<<\n", stmp )
+    execute( stmp )
+    // system( stmp )
+  }
+
+  public sPrint	// ( [i,] format, sprint-parameters ... ) 
+  // Analogous to sprint. An sprint function; places result in $si (Default=1)
+  obfunc sPrint(){ local i, nda localobj str
+    str = new str_obj()
+    if( argtype(1) == 0 ){	// numeric first arg. Use to set si
+      sprint( str.s1, "s%d", $1 )
+      str.s2 = $s2		// format
+      nda = 3
+    }
+    if( argtype(1) == 2 ){	// string first arg. Use as format and set to s1
+      str.s1 = "s1"
+      str.s2 = $s1		// format
+      nda = 2
+    }
+    aN = new Vector( numarg() )	// for numeric args
+    aS = new List()		// for string args
+    sprint( str.s3, "sprint( %s, \"%s\"", str.s1, str.s2 )
+    for i=nda, numarg(){
+      aS.append( new str_obj( "" ))
+      if( argtype(i) == 0 ) {
+	aN.x[i-nda] = $i
+	sprint( str.s3, "%s, aN.x[%d]", str.s3, i-nda )
+      }
+      if( argtype(i) == 2 ) {
+	aS.o(i-nda).s1 = $si
+	sprint( str.s3, "%s, aS.o(%d).s1", str.s3, i-nda )
+      }
+    }
+    sprint( str.s3, "%s )", str.s3 )
+    if( idebug ) printf( "sprint command >>%s<<\n", str.s3 )
+    execute( str.s3, this )
+    return this
+  }
+endtemplate str_obj
+
+//================================================================================
+begintemplate jQueue
+  objref q
+  public add, sum, sum2, pos_count
+  
+  //--------------------------------------------------------------------------------
+  proc init(){	//- ( size )
+    size 	= $1
+    q 		= new Vector( size, 0 )
+    i		= -1
+    sum		= 0
+    sum2	= 0
+    pos_count	= 0
+  }
+  //--------------------------------------------------------------------------------
+  proc add( ){	//- ( number )
+    a 		= $1
+    i 		= (i + 1) % size
+    sum 	= sum + a - q.x[i]
+    sum2	+= a^2 - q.x[i]^2
+    if( a > 0 ) pos_count += 1
+    if( q.x[i] > 0 ) pos_count -= 1
+    q.x[i] = a
+  }
+
+endtemplate jQueue
+
+//================================================================================
+begintemplate eTrace
+  objref	this
+  strdef 	tstr1, tstr2
+  public	col_t, col_v, col_sd, col_n, row_n, name, short_name
+  public 	vec_t, vec_v, vec_i, vec_sd, vec_dv, vec_ddv, vec_tmp, vec_ddv_sp
+  public	plot, addplot, plotG, plot_color, plot_brush, plot_recenter, load_file, smooth_exp, insert_ends
+  public	set_dt_sample, dt_sample, load_Vectors, save_file
+  public	stim_del, stim_dur, stim_amp, has_sd, plot_sd, plot_i, has_i
+  public	zc_cache, idebug
+  strdef	header, name, short_name, buf, tok
+  objref	vec_t, vec_v, vec_i, vec_sd, vec_dv, vec_ddv, vec_tmp, vec_ddv_sp, edf, plotG, g2, g3
+  strdef	zc_cache, seg_cache, VdV_cache
+  public	seg_nspikes, eAvg_n, tmp, sf_cutoff
+
+  //--------------------------------------------------------------------------------
+  proc init(){				//- ( )
+    col_t	= 1			//- Column at which to find time in file
+    col_v	= 2			//- Column at which to find voltage in file
+    col_sd	= 3			//- Column at which to find voltage SD in file
+    col_n	= 2			//- Number of columns in file
+    has_sd	= 0			//- files have no SDs by default
+    plot_color	= 1
+    plot_brush	= 1
+    plot_recenter = 1
+    plot_sd	= 0			//- 0-no plot; 1 plot on zero; 2- plot +- trace
+    plot_i	= 0			//- 0-no plot; 1 plot 
+    vec_t	= new Vector()		//- Time vector
+    vec_v	= new Vector()		//- Voltage vector
+    vec_i	= new Vector()		//- current vector (atf files)
+    has_i	= 0			//- 1 if it has current 
+    vec_sd	= new Vector()		//- SD of Voltage vector
+    vec_dv	= new Vector()		//- First derivative
+    vec_ddv	= new Vector()		//- Second derivative
+    vec_tmp	= new Vector()		//- For various uses
+    // Defaults. stim_xxx are read from TraceSet files
+    stim_del	= 20			//- stimulation delay
+    stim_dur	= 500			//- stimulation duration
+    stim_amp	= 0.8			//- stimulation amplitude
+    zc_dt	= 0.4			//- zc window size (ms); all points on left >=0 and on righ <= 0
+    zc_rms_th	= 0			//- default rms threshold (factor) to detect zero crossings (zc)
+    zc_cache	= ""			//- zc cache flag
+    sf_cutoff	= 200			// cutoff for variable_sf
+    
+    seg_cache	= ""			//- spk cache flag
+    seg_nspikes = -1			//- Num of spikes found by seg_look
+    VdV_cache	= ""			//- VdV cache flag
+    idebug	= 0
+    htf_ntno	= 0			// number or traces in htf loaded file
+    eAvg_n	= 0			// to count number of traces for eAvg
+    tmp		= 0			// temp var
+  }
+  //--------------------------------------------------------------------------------
+  public copy
+  obfunc copy(){ localobj eTc
+    eTc = new eTrace()
+    eTc.name = name
+    eTc.dt_sample = dt_sample
+    eTc.col_t=col_t 
+    eTc.col_v=col_v 
+    eTc.col_sd=col_sd 
+    eTc.col_n=col_n
+    eTc.plot_color=plot_color 
+    eTc.plot_brush=plot_brush 
+    eTc.plot_recenter=plot_recenter 
+    eTc.plot_sd=plot_sd 
+    eTc.vec_v=vec_v.c 
+    eTc.vec_t=vec_t.c 
+    eTc.vec_i=vec_i.c eTc.has_i=has_i
+    eTc.vec_v=vec_v.c 
+    eTc.vec_sd=vec_sd.c
+    eTc.vec_dv=vec_dv.c 
+    eTc.vec_ddv=vec_ddv.c 
+    eTc.stim_del=stim_del 
+    eTc.stim_dur=stim_dur 
+    eTc.stim_amp=stim_amp 
+    eTc.zc_dt=zc_dt 
+    eTc.zc_rms_th=zc_rms_th 
+    eTc.zc_cache=zc_cache 
+    eTc.seg_cache=seg_cache 
+    eTc.idebug=idebug
+    return eTc
+  }
+  
+  //--------------------------------------------------------------------------------
+  public systemLF
+  func systemLF(){ local sret localobj sf_
+    sf_ = new StringFunctions()
+    sret = system( $s1, $s2 )
+    if( sf_.substr( $s2, "\n" ) > 0 )  sf_.head( $s2, "\n", $s2 )
+    return sret
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc load_file(){ localobj sf				//- ( name )
+    edf = new File()
+    name = $s1
+    if( numarg()>= 2 ) short_name = $s2
+    sf = new StringFunctions()
+
+    edf.ropen( name )
+
+    comm_n = 0					//- Count comment lines; lines with '#' as first char
+    go_on = 1
+    if( idebug ) printf( "load_file: comm_n %d col_n %d col_t %d col_v %d col_sd %d has_sd %d\n", \
+      		    comm_n, col_n, col_t, col_v, col_sd, has_sd )
+    while( go_on ){
+      edf.gets( header )
+      if( sf.head( header, "#", tok ) != 0 ) { 
+	go_on = 0 
+      } else { 
+	if( sf.tail( header, "#nrn ", tok ) > -1 ){
+	  sf.left( tok, sf.len(tok)-1 )
+	  sprint( tok, "%s", tok )
+	  if( idebug ) printf( "Executing %s\n", tok )
+	  execute( tok, this )
+	}
+	comm_n += 1 
+      }
+    }
+    
+    if( idebug ) printf( "load_file: comm_n %d col_n %d col_t %d col_v %d col_sd %d has_sd %d\n", \
+      		    comm_n, col_n, col_t, col_v, col_sd, has_sd )
+    edf.ropen( name )				//- reopen file
+    for i=1, comm_n edf.gets( header )		//- read comment lines (ignored)
+    vec_t.scanf( edf, col_t, col_n )
+    //    vec_t.mul( 1000 )				//- Convert to milliseconds
+
+    edf.ropen( name )				//- reopen file
+    for i=1, comm_n edf.gets( header )		//- read comment lines (ignored)
+    vec_v.scanf( edf, col_v, col_n )
+    
+    if( has_sd ){
+      edf.ropen( name )				//- reopen file
+      for i=1, comm_n edf.gets( header )		//- read comment lines (ignored)
+      vec_sd.scanf( edf, col_sd, col_n )
+    }
+    set_dt_sample()
+    clear_cache()
+
+    edf.close()
+  }
+  //--------------------------------------------------------------------------------
+  public load_atf //( filename, V_colN [, I_colN ] )
+  obfunc load_atf(){ local colV, colI, i, ivS, bS localobj edf, str, tB
+    has_i = 0
+    name = $s1
+    colV = $2	// tno for voltage readings
+    colI = -1
+    if( numarg() > 2 ) colI = $3
+    
+    str = new str_obj()
+    edf = new File()
+
+    edf.ropen( name )
+    if( ! edf.isopen()){
+      printf( "\n\n \t\tload_atf ERROR: >>%s<< not found\n\n", name )
+      return
+    }
+    edf.scanstr( str.s1 ) 
+    if( strcmp( "ATF", str.s1 ) != 0 ) {
+      printf( "\n\n \t\tload_atf ERROR: Not ATF format.\n\n" )
+      return
+    }
+    edf.scanstr( str.s2 )
+    ncoms = edf.scanvar()
+    ncols = edf.scanvar()
+    if ( idebug > 1 ) printf( "ncoms %g ncols %g\n", ncoms, ncols )
+    if( colV > ncols || colI > ncols ){
+      printf( "\n\n \t\tload_atf ERROR: trial colV=%g or colI=%g not found in >>%s<<\n\n", colV, colI, name )
+      return
+    }
+    
+    vec_t = new Vector()
+    vec_v = new Vector()
+    if( colI > 0 ) vec_i = new Vector()
+    bS = 0
+    tB = new Vector( ncols )
+    while( ! edf.eof ){
+      if( bS==0 || ( bS <= vec_t.size ) ){
+	if( bS==0 ) bS = 2^14
+	if( idebug > 1 ) printf( "bS %g vec_t.size %g\n", bS, vec_t.size )
+	bS = 2 * bS
+	vec_t.buffer_size( bS )
+	vec_v.buffer_size( bS )
+	if( colI > 0 ) vec_i.buffer_size( bS )
+      }
+      tB.scanf( edf, ncols )
+      vec_t.append( tB.x[0]*1000 )
+      vec_v.append( tB.x[colV-1] )
+      if( colI > 0 ) vec_i.append( tB.x[colI-1] )
+    }
+
+    set_dt_sample()
+    clear_cache()
+
+    edf.close()
+
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  // Use HOME environment variable to resolve file name if not begin with "/"
+  public load_atf_home
+  obfunc load_atf_home(){ localobj st, sf
+    sf = new StringFunctions()
+    st = new str_obj( $s1 )
+    if( sf.substr( $s1, "/" ) != 0 ){
+      systemLF( "echo $HOME", st.s1 )
+      sprint( st.s1, "%s/%s", st.s1, $s1 )
+    }
+    if( numarg() >= 3 ) load_atf( st.s1, $2, $3 )
+    if( numarg() < 3 ) load_atf( st.s1, $2 )
+    return this
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Use HOME environment variable to resolve file name if not begin with "/"
+  // take colNs as text  file:c1:c2
+  public load_atf_home_S
+  proc load_atf_home_S(){ local c1, c2 localobj str, sf
+    sf = new StringFunctions()
+    str = new str_obj( $s1 )
+    sf.tail( str.s1, ":", str.s2  )    
+    sf.head( str.s1, ":", str.s1  )    
+    c2 = -1
+    if( sscanf( str.s2, "%d:%d", &c1, &c2 ) < 1 ){
+      printf( "\n\n\tload_atf_home_S: ERROR wrong parameters. expecting fname:x:y got >>%s<<\n", $s1 )
+      return
+    }
+    load_atf_home( str.s1, c1, c2 )
+  }
+  
+  //--------------------------------------------------------------------------------
+  public save_atf
+  proc save_atf(){ local i, ym, yM, im, iM localobj str, eF, hiS	// ( eT, fname [,comm] )
+    str = new str_obj( $s1 )
+    if( numarg() > 1 ) str.s2=$s2
+    
+    ym = im = 1e60
+    yM = iM = -1e60
+    for i=0, vec_v.size-1 {
+      if( vec_v.x[i] > yM ) yM = vec_v.x[i]
+      if( vec_v.x[i] < ym ) ym = vec_v.x[i]
+      if( has_i ){
+	if( vec_i.x[i] > iM ) iM = vec_i.x[i]
+	if( vec_i.x[i] < im ) im = vec_i.x[i]
+      }
+    }
+    hiS = new str_obj()
+    if( has_i ){
+      sprint( hiS.s1, ",%g", iM )
+      sprint( hiS.s2, ",%g", im )
+      sprint( hiS.s3, "\t\"Im\"" )
+      sprint( hiS.s4, "\t\"Trace #1 (nA)\"" )
+      sprint( hiS.s5, ",Im" )
+    }
+    eF = new File()
+    eF.wopen( str.s1 )
+    eF.printf( "ATF\t1.0\n7\t%d\n", 2+has_i )
+    eF.printf( "\"AcquisitionMode=Episodic Stimulation\"\n" )
+    eF.printf( "\"Comment=%s Created by save_atf jose@kiubo.net c2006\"\n", str.s2 )
+    eF.printf( "\"YTop=%g%s\"\n", yM, hiS.s1 )
+    eF.printf( "\"YBottom=%g%s\"\n", ym, hiS.s2 )
+    eF.printf( "\"SweepStartTimesMS=0.000\"\n" )
+    eF.printf( "\"SignalsExported=Vm%s\"\n", hiS.s5 )
+    eF.printf( "\"Signals=\"\t\"Vm\"%s\n", hiS.s3 )
+    eF.printf( "\"Time (ms)\"\t\"Trace #1 (mV)\"%s\n", hiS.s4 )
+    
+    for i=0, vec_v.size-1 {
+      eF.printf( "%g\t%g", vec_t.x[i], vec_v.x[i] )
+      if( has_i ) eF.printf( "\t%g", vec_i.x[i] )
+      eF.printf( "\n" )
+    }
+    eF.close()
+  }
+  
+  //--------------------------------------------------------------------------------
+  public load_atf_all
+  obfunc load_atf_all(){ local i, bS localobj edf, str, vL, tB
+    str = new str_obj( $s1 )    
+    vL = new List()
+
+    edf = new File()
+    edf.ropen( str.s1 )
+    if( ! edf.isopen()){
+      printf( "\n\n \t\tload_atf ERROR: >>%s<< not found\n\n", str.s1 )
+      return
+    }
+    edf.scanstr( str.s2 ) 
+    if( strcmp( "ATF", str.s2 ) != 0 ) {
+      printf( "\n\n \t\tload_atf ERROR: Not ATF format.\n\n" )
+      return
+    }
+    edf.scanstr( str.s2 )
+    ncoms = edf.scanvar()
+    ncols = edf.scanvar()
+    
+    for i=0, ncols-1 vL.append( new Vector() )
+
+    bS = 0
+    tB = new Vector( ncols )
+    while( ! edf.eof ){
+      if( bS==0 || ( bS <= vec_t.size ) ){
+	if( bS==0 ) bS = 2^14
+	if( idebug > 1 ) printf( "bS %g vec_t.size %g\n", bS, vec_t.size )
+	bS = 2 * bS
+	for i=0, ncols-1 vL.o(i).buffer_size( bS )
+      }
+      tB.scanf( edf, ncols )
+      for i=0, ncols-1 vL.o(i).append( tB.x[i] )
+    }
+    edf.close()
+
+    return vL
+  }
+  
+  //--------------------------------------------------------------------------------
+  public save_atf_all_htf
+  proc save_atf_all_htf(){ local i localobj vL, str, eF, aV
+    vL = $o1
+    str = new str_obj( $s2 )
+    
+    eF = new File()
+    eF.wopen( str.s1 )
+    if( ! eF.isopen()){
+      printf( "\n\n \t\tsave_atf_all_htf ERROR cant write to >>%s<<\n\n", str.s1 )
+      return
+    }
+    aV = new Vector()
+    aV.buffer_size( vL.count * vL.o(0).size + 100 )
+    aV.append( vL.o(0).size )
+    aV.append( vL.count )
+    for i=0, vL.count-1 aV.append( vL.o(i) )
+    
+    aV.vwrite( eF, 4 )
+    eF.close()    
+  }
+  
+  //--------------------------------------------------------------------------------
+  public save_htf_1p0
+  proc save_htf_1p0(){ local i, nc localobj eL, str, sf, eF, aV
+    eL = $o1				// list of eTraces (all same time index)
+    str = new str_obj( $s2 )		// filename in str.s1
+    if( numarg()>2 ) str.s2 = $s3	// optional comment
+    
+    for i=0, eL.count-1 {
+      if( eL.o(0).vec_v.size != eL.o(i).vec_v.size ) \
+        printf( "\n\n\tsave_htf_1p0: WARNING diff size between 0 and %d\n\n", i )
+    }
+
+    if( vec_v.size != vec_t.size ){
+      printf( "\n\n \t\tsave_htf_1p0 ERROR: vec_t.size %d != vec_v.size %d\n", vec_t.size, vec_v.size )
+      return
+    }
+
+    sf = new StringFunctions()
+    nc = 0 
+    str.s3 = str.s2
+    while( sf.tail( str.s3, "\n", str.s3 )!= -1 ) nc += 1	// count comments
+    if( idebug ) printf( "save_htf_1p0: nc %d\n", nc )
+
+    eF = new File()
+    eF.wopen( str.s1 )
+    if( ! eF.isopen()){
+      printf( "\n\n \t\tsave_htf_1p0 ERROR cant write to >>%s<<\n\n", str.s1 )
+      return
+    }
+    eF.printf( "iHTF1.0 %d\n%s\n", nc+1, str.s2 )
+    aV = new Vector()
+    aV.buffer_size( (eL.count + 1) * eL.o(0).vec_t.size + 100 )	// Add one for time index vector
+    aV.append( eL.o(0).vec_t.size )			// x[0] size
+    aV.append( eL.count )				// x[1] number of trials
+    aV.append( eL.o(0).vec_t )				// time index 
+    for i=0, eL.count-1 aV.append( eL.o(i).vec_v )	// the vec_v parts
+    
+    aV.vwrite( eF, 4 )
+    eF.close()    
+  }
+
+  //--------------------------------------------------------------------------------
+  public load_htf_1p0, htf_ntno
+  //( filename, tno [, Root-env-var] )
+  obfunc load_htf_1p0(){ local tno, ncom, i, nsize localobj eF, str, aV
+    has_i = 0
+    str = new str_obj( $s1 )
+    tno = $2	// trial number to load [1..htf_ntno] (time vector in zero)
+    if( numarg()>2 ){
+      sprint( str.s4, "echo $%s", $s3 )		// prepend EnvVar to filename
+      systemLF( str.s4, str.s5 )
+      //sprint( str.s1, "%s/%s", str.s5, str.s1 )
+      if( idebug ) printf( "load_htf_1p0: opening >>%s<<\n", str.s1 )
+    }
+
+    sprint( name, "%s:%d", str.s1, tno )
+    eF = new File()
+    aV = new Vector()
+    
+    eF.ropen( str.s1 )
+    if( ! eF.isopen()){
+      printf( "\n\n \t\tload_htf_1p0 ERROR: >>%s<< not found\n\n", str.s1 )
+      return
+    }
+    eF.gets( str.s4 )
+    if( 1 != sscanf( str.s4, "iHTF1.0 %d", &ncom )){
+      printf( "\n\n \t\tload_htf_1p0 ERROR: expecting iHTF1.0 got >>%s<< \n\n", str.s4 )
+      return
+    }
+    for i=1, ncom eF.gets( str.s4 ) // skip comments
+    aV.vread( eF )
+    nsize = aV.x[0]
+    htf_ntno = aV.x[1]
+    if( tno > htf_ntno ){
+      printf( "\n\n \t\tload_atf ERROR: trial tno=%g not found in >>%s<<\n\n", tno, str.s1 )
+      return
+    }
+    if( idebug ) printf( "load_htf_1p0: aV.size %d nsize %d tno %d\n", aV.size, nsize, tno )
+    vec_t = aV.c( 2, 2+nsize-1 )
+    vec_v = aV.c( 2 + (tno)*nsize, 2 + (tno)*nsize + nsize -1 )
+    set_dt_sample()
+    clear_cache()
+    eF.close()
+    return this
+  }
+
+  public load_htf_1p0c // ( tno:filename [, Env-var] )
+  obfunc load_htf_1p0c(){ local tno localobj str
+    str = new str_obj( $s1 )
+    sscanf( str.s1, "%d:%s", &tno, str.s2 )
+    if( numarg()>1 ) { return load_htf_1p0( str.s2, tno, $s2 ) 
+    }else{ 	       return load_htf_1p0( str.s2, tno ) }
+  }
+  
+  //--------------------------------------------------------------------------------
+  public atf_2_htf
+  proc atf_2_htf(){ local i localobj vL
+    vL = load_atf_all( $s1 )
+    save_atf_all_htf( vL, $s2 )
+  }
+
+  //--------------------------------------------------------------------------------
+  public load_htf //( filename, V_colN [, I_colN ] )
+  obfunc load_htf(){ local colV, colI, i, nsize, ncols localobj edf, str, aV
+    has_i = 0
+    name = $s1
+    colV = $2	// tno for voltage readings
+    colI = -1
+    if( numarg() > 2 ) colI = $3
+    
+    str = new str_obj()
+    edf = new File()
+    aV = new Vector()
+
+    edf.ropen( name )
+    if( ! edf.isopen()){
+      printf( "\n\n \t\tload_atf ERROR: >>%s<< not found\n\n", name )
+      return
+    }
+    aV.vread( edf )
+    nsize = aV.x[0]
+    ncols = aV.x[1]
+    if( colV > ncols || colI > ncols ){
+      printf( "\n\n \t\tload_atf ERROR: trial colV=%g or colI=%g not found in >>%s<<\n\n", colV, colI, name )
+      return
+    }
+    
+    vec_t = aV.c( 2, 2+nsize-1 ).mul( 1000 )
+    vec_v = aV.c( 2 + (colV-1)*nsize, 2 + (colV-1)*nsize + nsize -1 )
+    if( colI > 0 ) vec_i = aV.c( 2 + (colI-1)*nsize, 2 + (colI-1)*nsize + nsize -1 )
+
+    set_dt_sample()
+    clear_cache()
+
+    edf.close()
+
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  // Use HOME environment variable to resolve file name if not begin with "/"
+  public load_htf_home
+  obfunc load_htf_home(){ localobj st, sf
+    sf = new StringFunctions()
+    st = new str_obj( $s1 )
+    
+    /* 	
+    if( sf.substr( $s1, "/" ) != 0 ){
+      systemLF( "echo $HOME", st.s1 )
+      sprint( st.s1, "%s/%s", st.s1, $s1 )
+    }
+   
+    if( numarg() >= 3 ) load_htf( st.s1, $2, $3 )
+    if( numarg() < 3 ) load_htf( st.s1, $2 )
+    */
+    load_htf($s1)
+    
+    return this
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Use HOME environment variable to resolve file name if not begin with "/"
+  // take colNs as text  file:c1:c2
+  public load_htf_home_S
+  proc load_htf_home_S(){ local c1, c2 localobj str, sf
+    sf = new StringFunctions()
+    str = new str_obj( $s1 )
+    sf.tail( str.s1, ":", str.s2  )    
+    sf.head( str.s1, ":", str.s1  )    
+    c2 = -1
+    if( sscanf( str.s2, "%d:%d", &c1, &c2 ) < 1 ){
+      printf( "\n\n\tload_htf_home_S: ERROR wrong parameters. expecting fname:x:y got >>%s<<\n", $s1 )
+      return
+    }
+    load_htf_home( str.s1, c1, c2 )
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc load_Vectors(){			//- load_Vectors( vec_t, vec_v )
+    vec_v = $o1.c
+    vec_t = $o2.c
+    set_dt_sample()
+    clear_cache()
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Use cNeuro environment variable to make code more portable
+  public load_cNeuro
+  proc load_cNeuro(){
+    systemLF( "echo $cNeuro", tstr1 )
+    sprint( tstr1, "%s/%s", tstr1, $s1 )
+    if( numarg() >= 2 ) load_file( tstr1, $s2 )
+    if( numarg() < 2 ) load_file( tstr1 )
+  }
+
+  //--------------------------------------------------------------------------------
+  // Use HOME environment variable to resolve file name if not begin with "/"
+  public load_file_home
+  proc load_file_home(){ localobj st, sf
+    sf = new StringFunctions()
+    st = new str_obj( $s1 )
+    if( sf.substr( $s1, "/" ) != 0 ){
+      systemLF( "echo $HOME", st.s1 )
+      sprint( st.s1, "%s/%s", st.s1, $s1 )
+    }
+    if( numarg() >= 2 ) load_file( st.s1, $s2 )
+    if( numarg() < 2 ) load_file( st.s1 )
+  }
+  
+  //--------------------------------------------------------------------------------
+  public load_wcp
+  obfunc load_wcp(){ local tno, chn, ljp localobj str
+    str = new str_obj( $s1 )
+    tno = $2
+    chn = $3
+    ljp = $4
+    sprint( str.s2, "Emes5 %s %d %d -xWcp %d -dcOff -show_Trace > tmp_wcp.txt", str.s1, tno, chn, ljp )
+    if( idebug ) printf( "load_wcp: executing >>%s<<\n", str.s2 )
+    system( str.s2 )
+    load_file( "tmp_wcp.txt" )
+    sprint( name, "%s-t=%d-ch=%d-ljp=%d", str.s1, tno, chn, ljp )
+    return this 
+  }
+
+  //--------------------------------------------------------------------------------
+  public load_wcp_all 
+  obfunc load_wcp_all(){ local i, nrec, nchan, bS localobj edf, str, vL, tB
+    str = new str_obj( $s1 )    
+    vL = new List()
+
+    edf = new File()
+    edf.ropen( str.s1 )
+    if( ! edf.isopen()){
+      printf( "\n\n \t\tload_wcp_all ERROR: >>%s<< not found\n\n", str.s1 )
+      return vL
+    }
+    sprint( str.s2, "egrep -a 'NR=|NC=' %s | sort | tr '\n\r' '  '", str.s1 )
+    system( str.s2, str.s3 )
+    sscanf( str.s3, "NC=%d NR=%d", &nchan, &nrec )
+    if( idebug ) printf( "load_wcp_all: NC %g NR %g\n", nchan, nrec )
+    edf.close()
+    
+    // for ic=0, nchan  vL.append( new List() )
+
+    for ic=0, nchan-1 {
+      for ir=1, nrec {
+	load_wcp( str.s1, ir, ic, 0 )
+	if( ir==1 && ic==0 ) vL.append( vec_t.c )	// place time as first member
+	vL.append( vec_v.c )
+      }
+    }
+    return vL
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc save_file(){ localobj edf			//- ( name )
+    edf = new File()
+    name = $s1
+    edf.wopen( name )
+    edf.printf( "#nrn col_n=2 col_t=1 col_v=2 stim_del=%g stim_dur=%g stim_amp=%g\n", \
+    stim_del, stim_dur, stim_amp )
+    if( numarg() > 1 ) edf.printf( $s2 )
+    for i=0, vec_t.size()-1 edf.printf( "%.10g %.10g\n", vec_t.x[i], vec_v.x[i] )
+    edf.close()
+  }
+  
+  //--------------------------------------------------------------------------------
+  public parse_name, cell_id, ms_id, pA_id, cond_id, num_id
+  strdef cell_id, ms_id, pA_id, cond_id, num_id
+  proc parse_name(){ localobj sf
+    sf = new StringFunctions()
+    sf.tail( name, "blk/|ACSF/", ms_id )
+    sf.head( ms_id, "/", cell_id )
+    sf.tail( ms_id, "/", ms_id )
+    sf.head( ms_id, ".txt", ms_id )
+    sf.tail( ms_id, "_", cond_id )
+    sf.head( ms_id, "_", ms_id )
+    sf.tail( ms_id, "ms", pA_id )
+    sf.head( ms_id, "\\+|-", ms_id )
+    sf.tail( cond_id, "_", num_id )
+    sf.head( cond_id, "_", cond_id )
+  }
+  
+  //--------------------------------------------------------------------------------
+  public set_new_dt
+  obfunc  set_new_dt(){ local newdt localobj taux
+    newdt = $1
+    taux = new Vector()
+    taux.indgen( vec_t.x[0], vec_t.x[vec_t.size-1], newdt )
+    vec_v.interpolate( taux, vec_t )
+    vec_t = taux.c
+    dt_sample = newdt //taux.x[1] - taux.x[0]
+    return this
+  }
+  //--------------------------------------------------------------------------------
+  // dt_sample = -1 if sampling freq is not uniform; otherwise dt_sample = sample interval
+  //
+  proc set_dt_sample(){ local i
+    dt_sample	= vec_t.x[1]-vec_t.x[0]
+    for i=1, vec_t.size()-1 {
+      if( vec_t.x[i]-vec_t.x[i-1] == dt_sample ) continue
+      dt_sample = -1
+      break
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  obfunc plot() {	
+    // if( object_id( plotG ) == 0 ) {
+    plotG = new Graph()
+    plotG.family( 1 )	//- To keep lines
+    if( numarg() >= 1 ) plot_color = $1
+    if( numarg() >= 2 ) plot_brush = $2
+    plotG.color( plot_color )
+    plotG.brush( plot_brush )
+    vec_v.line( plotG, vec_t )
+    plotG.label( name )
+    if( has_sd && plot_sd>0 ) {
+      plot_color += 1
+      plotG.color( plot_color )
+      if( plot_sd == 1 ) vec_sd.line( plotG, vec_t )
+      if( plot_sd==2 ) vec_sd.c.add(vec_v).line( plotG, vec_t )
+    }
+    if( has_i && plot_i ) vec_i.line( plotG, vec_t )
+    recenter()
+    return this
+  }
+  //--------------------------------------------------------------------------------
+  proc addplot() {	
+    if( numarg() > 1 ) {
+      plot_color += 1
+      if( plot_color%10 == 0 || plot_color%10 == 8 ) plot_color += 1
+    }
+    if( object_id( plotG )==0 ) { plotG = new Graph() }
+    plotG.color( plot_color )
+    plotG.brush( plot_brush )
+    $o1.vec_v.line( plotG, $o1.vec_t )
+    plotG.label( $o1.name )
+    if( $o1.has_i && plot_i ) $o1.vec_i.line( plotG, $o1.vec_t )
+    recenter()
+  }
+  
+  //--------------------------------------------------------------------------------
+  public addplot_c
+  proc addplot_c() { local col localobj eT
+    eT = $o1
+    if( numarg() > 1 ) {
+      plot_color = $2
+    }
+    if( numarg() > 2 ) {
+      plot_brush = $3
+    }
+    if( object_id( plotG )==0 ) { plotG = new Graph() }
+    plotG.color( plot_color )
+    plotG.brush( plot_brush )
+    eT.vec_v.line( plotG, eT.vec_t )
+    plotG.label( eT.name )
+    if( eT.has_i && plot_i ) eT.vec_i.line( plotG, eT.vec_t )
+    recenter()
+  }
+  
+  //--------------------------------------------------------------------------------
+  public recenter
+  proc recenter() {	
+    if( plot_recenter ) plotG.exec_menu( "View = plot" )
+  }
+  
+  //--------------------------------------------------------------------------------
+  // plot v,dv,ddv according to option XXX (X=1 plot, X=0 no plot) 
+  public plot_ddv
+  obfunc plot_ddv(){ local i, opt, col, vm, dvm, ddvm localobj pG
+    pG = $o1
+    opt = $2
+    { col=1 if( numarg()>2 ) col = $3 }
+    { vm=0.1 dvm=0.01 ddvm=0.001 if( numarg()>3 ){ vm=$4 dvm= $5 ddvm=$6 }}
+    if( object_id( pG )==0 ) { pG = new Graph() }
+    pG.color( col )
+    if( int(opt/100)%10 ) vec_v.c.mul(vm).line( pG, vec_t )
+    if( int(opt/10)%10 )  vec_dv.c.mul(dvm).line( pG, vec_t )
+    if( int(opt/1)%10 )   vec_ddv.c.mul(ddvm).line( pG, vec_t )
+    pG.label( name )
+    pG.exec_menu( "View = plot" )
+    return pG
+  }
+
+  //--------------------------------------------------------------------------------
+  public eAvg
+  obfunc eAvg(){ local i localobj eT
+    eT = $o1
+    if( eAvg_n == 0 ){ 
+      vec_v = eT.vec_v.c
+      vec_t = eT.vec_t.c
+      dt_sample = eT.dt_sample
+      sprint( name, "avg %s", eT.name )
+    }else{
+      sprint( name, "%s %s", name, eT.name )
+      vec_v.add( eT.vec_v )
+      vec_v.mul( 1/(eAvg_n+1) )
+    }
+    eAvg_n += 1
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  public cut_at		// cut points past t from trace
+  obfunc cut_at(){ local tmin, tmax, im, t_adj
+    tmax = $1
+    if( idebug ) printf( "cut_at: tmax %g\n", tmax )
+
+    if( vec_t.x[ vec_t.size -1] <= tmax ) return this
+
+    for( im=0; vec_t.x[im] <= tmax; im+=1 ){}    
+    vec_t.resize( im )
+    vec_v.resize( im )
+    
+    if( stim_del > tmax ) { stim_del=tmax stim_dur=0
+    }else{
+      if( stim_del + stim_dur > tmax ) stim_dur = tmax - stim_del
+    }      
+
+    clear_cache()
+    return this
+  }
+  
+  //--------------------------------------------------------------------------------
+  public cut_at2	// leave [tmin, tmax] of trace
+  obfunc cut_at2(){ local tmin, tmax, im, t_im, t_adj		// ( tmax [, tmin [ t_adj]] )
+    tmax = $1
+    if( idebug ) printf( "cut_at2: tmax %g\n", tmax )
+    if( vec_t.size <= 0 ) return this
+
+    if( vec_t.x[ vec_t.size -1] > tmax ){
+      for( im=0; vec_t.x[im] <= tmax; im+=1 ){}    
+      vec_t.resize( im )
+      vec_v.resize( im )
+      if( vec_dv.size>0 ) vec_dv.resize( im )
+      if( vec_ddv.size>0 ) vec_ddv.resize( im )
+      if( has_i ) vec_i.resize( im )
+      if( has_sd ) vec_sd.resize( im )
+    }
+
+    if( numarg() > 1 ){
+      tmin = $2
+      if( idebug ) printf( "cut_at2: tmin %g\n", tmin )
+      t_adj = 1
+      if( numarg() > 2 ) t_adj = $3
+      im = 0
+      while( vec_t.x[im] < tmin ){
+	im += 1
+	if( im==vec_t.size ) break
+      }
+      if( im > 0 ){
+	if( im<vec_t.size ) t_im = vec_t.x[im]
+	vec_t.remove( 0, im-1 )
+	vec_v.remove( 0, im-1 )
+	if( vec_dv.size>0 ) vec_dv.remove( 0, im-1 )
+	if( vec_ddv.size>0 ) vec_ddv.remove( 0, im-1 )
+	if( has_i ) vec_i.remove( 0, im-1 )
+	if( has_sd ) vec_sd.remove( 0, im-1 )
+
+	if( t_adj > 0 ){
+	  for i=0,vec_t.size-1 vec_t.x[i] -= t_im
+	  if( t_im < stim_del ){ stim_del -= t_im
+	  }else{
+	    if( t_im < stim_del+stim_dur ){ 
+	      stim_dur -= (t_im - stim_del)
+	      stim_del=0
+	    }else{ stim_del = stim_dur = 0
+	    }
+	  }
+	}
+      }
+    }
+    clear_cache()
+    return this
+  }
+  
+  //--------------------------------------------------------------------------------
+  public ddv_spline
+  obfunc ddv_spline(){ local i, sig, p localobj ddv, u
+    ddv = new Vector( vec_t.size )
+    u = new Vector( vec_t.size )
+    ddv.x[0] = u.x[0] = 0
+    for i=1, vec_t.size - 2 {
+      sig = (vec_t.x[i]-vec_t.x[i-1]) / (vec_t.x[i+1]-vec_t.x[i-1])
+      p = sig * ddv.x[i-1] + 2
+      ddv.x[i] = (sig - 1 ) / p
+      u.x[i] = (vec_v.x[i+1]-vec_v.x[i]) / (vec_t.x[i+1]-vec_t.x[i]) - \
+               (vec_v.x[i]-vec_v.x[i-1]) / (vec_t.x[i]-vec_t.x[i-1])
+      u.x[i] = (6 * u.x[i]/(vec_t.x[i+1] - vec_t.x[i-1]) - sig * u.x[i-1]) / p
+    }
+    ddv.x[ vec_t.size-1 ] = 0
+    for( i=vec_t.size-2; i>=0; i -= 1 ) ddv.x[i] = ddv.x[i] * ddv.x[i+1] + u.x[i]
+    
+    return ddv
+  }    
+  
+  //--------------------------------------------------------------------------------
+  public filter_kHz_Hi
+  obfunc filter_kHz_Hi(){ local i, icof, cof_kHz localobj R, Rf, F, Rfb
+    cof_kHz = $1
+    if( dt_sample <= 0 ) {
+      printf( "filter_kHz_Hi: invalid dt_sample = %g\n", dt_sample )
+      abort()
+    }
+    R = pad_ends( vec_v )
+    Rf = new Vector()
+    Rf.fft( R, 1 ).div( Rf.size/2 )
+    F = Rf.c
+    icof = cof_kHz * 2 * Rf.size * dt_sample
+    for i=0, icof-1 	 F.x[i] = 1
+    for i=icof, F.size-1 F.x[i] = 0
+    Rfb = new Vector()
+    Rfb.fft( Rf.mul( F ), -1 )
+    vec_v = unpad_ends( vec_v.size, Rfb )
+    return this
+  }
+  
+  obfunc pad_ends(){ local i, n, n2, nd1, nd2 localobj v1, v2
+    v1 = $o1 
+    n = v1.size
+    n2 = 1
+    while( n2 < n ) n2 *= 2
+    v2 = new Vector( n2, v1.x[n-1] )
+    nd1 = int( (n2-n)/2 )
+    for i=0, nd1-1 	v2.x[i] = v1.x[0]
+    for i=nd1, nd1+n-1 	v2.x[i] = v1.x[i-nd1]
+    if( idebug ) printf( "pad_ends: paded nd1 %g exiting\n", nd1 )
+    return v2
+  }
+
+  obfunc unpad_ends(){ local i, nd1 localobj v1, v2
+    norig = $1
+    v1 = $o2
+    if( idebug ) printf( "unpad_ends: entering norig %g\n", norig )
+    v2 = new Vector( norig )
+    n2 = v1.size
+    nd1 = int( (v1.size - norig)/2 )
+    for i=0, norig-1 v2.x[i] = v1.x[i+nd1]
+    if( idebug ) printf( "unpad_ends: paded nd1 %g exiting\n", nd1 )
+    return v2
+  }
+  
+  //--------------------------------------------------------------------------------
+  public plot_spectra
+  proc plot_spectra(){ local col localobj R, Rf, pG
+    pG = $o1
+    col = 1
+    if( numarg() > 1 ) col = $2
+    R = pad_ends( vec_v )
+    Rf = new Vector()
+    Rf.fft( R, 1 ).div( Rf.size/2 )
+    Rf.x[0] /= 2
+    Rf.x[1] /= 2
+    Rf.pow(2).log10.line( pG, 1000/(2*Rf.size*dt_sample), col, 1 )
+  }
+
+  //--------------------------------------------------------------------------------
+  public filter_lsq // ( option )
+  obfunc filter_lsq(){ localobj fL, cF
+    
+    fL = vec_v.c
+    
+    if( $1 == 1 ){ cN=2 cF=new Vector(5) cF.x[0]=0.486 cF.x[1]=0.343 cF.x[2]=0.343 cF.x[3]=-0.086 cF.x[4]=-0.086 }
+    if( $1 == 2 ){ cN=4 cF=new Vector(9) cF.x[0]=0.417 cF.x[1]=cF.x[2]=0.315 cF.x[3]=cF.x[4]=0.070 cF.x[5]=cF.x[6]=-0.128 cF.x[7]=cF.x[8]=0.035 }
+
+    for i=cN, vec_v.size-1-cN {
+      fL.x[i] = vec_v.x[i] * cF.x[0]
+      for n=1,cN fL.x[i] += vec_v.x[i-n] * cF.x[2*n-1] + vec_v.x[i+n] * cF.x[2*n]
+    }
+    vec_v = fL.c
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  public half_sf
+  proc half_sf(){ localobj oldT
+    oldT = vec_t.c
+    vec_t = new Vector( vec_t.size / 2 )
+    vec_t.indgen( dt_sample*2 )
+    vec_v.interpolate( vec_t, oldT )
+    dt_sample *= 2
+    clear_cache()
+  }
+
+  //--------------------------------------------------------------------------------
+  public double_sf
+  proc double_sf(){ localobj oldT
+    oldT = vec_t.c
+    vec_t = new Vector( vec_t.size * 2 )
+    vec_t.indgen( dt_sample/2 )
+    vec_v.interpolate( vec_t, oldT )
+    dt_sample /= 2
+    clear_cache()
+  }
+
+  //--------------------------------------------------------------------------------
+  public resample_dt
+  obfunc resample_dt(){ local new_dt localobj oldT
+    new_dt = $1
+    oldT = vec_t.c
+    vec_t = new Vector( oldT.x[ oldT.size-1 ]/new_dt )
+    vec_t.indgen( new_dt )
+    vec_v.interpolate( vec_t, oldT )
+    if( vec_i.size > 0 ) vec_i.interpolate( vec_t, oldT )
+    if( vec_dv.size > 0 ) vec_dv.interpolate( vec_t, oldT )
+    if( vec_ddv.size > 0 ) vec_ddv.interpolate( vec_t, oldT )
+    dt_sample = new_dt
+    clear_cache()
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  public variable_sf	// drop points keeping interpolation within a tolerance of vdiff
+  obfunc variable_sf(){ local vdiff, im, id, i localobj eT
+    vdiff = $1
+    eT = new eTrace()
+    im = 0
+    while( im < vec_t.size-1 ) {
+      eT.vec_t.append( vec_t.x[im] ) eT.vec_v.append( vec_v.x[im] )
+      id = 2
+      go_on = 1
+      while( go_on ) {
+	// printf( "variable_sf: working on im %g %id\n", im, id )
+	if( im+id < vec_t.size-1 ){
+	  m = (vec_v.x[im] - vec_v.x[im+id]) / (vec_t.x[im] - vec_t.x[im+id])
+	  b = vec_v.x[im] - m * vec_t.x[im]
+	  for i=1, id-1 if( abs( m*vec_t.x[im+i]+b - vec_v.x[im+i] ) > vdiff ) go_on = 0
+	  if( id > sf_cutoff ) go_on = 0	// to break quadratic in above for
+	  if( go_on ) id += 1
+	} else { go_on=0 }
+      }
+      im = im + id -1
+    }
+    vec_t = eT.vec_t.c 
+    vec_v = eT.vec_v.c
+    dt_sample = -1
+    clear_cache()
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  public baseline_align
+  objref tr_list
+  proc  baseline_align(){ local tmin, tmax, im, iM, iT, bl, bl_avg
+    tmin = $1
+    tmax = $2
+    tr_list = $o3
+    bl_avg = 0
+    if( tr_list.count < 2 ) return
+    for iT=0, tr_list.count-1 {
+      for( im=0; tr_list.object(iT).vec_t.x[im] < tmin; im+=1 ){}
+      for( iM=im+1; tr_list.object(iT).vec_t.x[iM] < tmax; iM+=1 ){}
+      bl_avg += tr_list.object(iT).vec_v.mean( im, iM )
+    }
+    bl_avg = bl_avg / tr_list.count
+    if( idebug ) printf( "baseline_average %g\n", bl_avg )
+
+    for iT=0, tr_list.count-1 {
+      for( im=0; tr_list.object(iT).vec_t.x[im] < tmin; im+=1 ){}
+      for( iM=im+1; tr_list.object(iT).vec_t.x[iM] < tmax; iM+=1 ){}
+      bl = tr_list.object(iT).vec_v.mean( im, iM )
+      if( idebug ) printf( "shifting %d bl %g by %g\n", iT, bl, bl_avg-bl )
+      tr_list.object(iT).vec_v.add( bl_avg - bl )
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  // shift all data points in (tmin, tmax]
+  public dc_shift
+  obfunc dc_shift(){ local tmin, tmax, dc, im, it
+    tmin = $1
+    tmax = $2
+    dc = $3
+    if( idebug ) printf( "dc_shift: tmin %g tmax %g dc %g\n", tmin, tmax, dc )
+    for( im=0; im < vec_t.size; im+= 1 ){
+      if( vec_t.x[im]> tmin ) break
+    }
+    if( idebug ) printf( "dc_shift im %d %g", im, vec_t.x[im] )
+    for( it=im; it < vec_t.size; it += 1 ){
+      if( vec_t.x[it] > tmax ) break      
+      vec_v.x[it] += dc
+    }
+    if( idebug ) printf( " it %d %g\n", it, vec_t.x[it-1] )
+    return this
+  }
+
+  //--------------------------------------------------------------------------------
+  // shift all voltage data points by ts ms. Time index is preserved
+  public time_shift
+  obfunc time_shift(){ local ts, nadd, sz localobj Vadd
+    ts = $1
+    if( dt_sample <=0 ) abort( "time_shift: cant use non-uniform sampling freq\n" )
+    
+    nadd = int( 0.5 + abs(ts)/dt_sample )
+    sz = vec_v.size
+
+    if( ts >= 0 ) {
+      Vadd = new Vector( nadd, vec_v.x[0] )
+      vec_v.insrt( 0, Vadd )
+      vec_v.remove( sz, sz+nadd-1 )
+    }else{
+      Vadd = new Vector( nadd, vec_v.x[sz-1] )
+      vec_v.insrt( sz, Vadd )
+      vec_v.remove( 0, nadd-1 )
+    }
+    clear_cache()
+    return this
+  }
+  //--------------------------------------------------------------------------------
+  public sample
+  proc sample(){ localobj t_aux
+    t_aux = new Vector()
+    t_aux.indgen( vec_t.x[0], vec_t.x[vec_t.size()-1], $1 )
+    vec_v.interpolate( t_aux, vec_t )
+    vec_t = t_aux.c
+    dt_sample = $1
+  }
+
+  //--------------------------------------------------------------------------------
+  proc smooth_exp(){				//- ( b[0-1] ) b=0 for no smooth
+    b = $1
+    b1 = 1 - b
+    v_sm = vec_v.x[0]
+    for i=1, vec_v.size()-1 vec_v.x[i] = b1*vec_v.x[i] + b*vec_v.x[i-1]
+    clear_cache()
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc abort(){	//- abort( str )
+    printf( "%s\n", $s1 )
+    execute( "aborting" )	//- deliberate execution error 
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc clear_cache(){
+    zc_cache = ""
+    seg_cache = ""
+    VdV_cache = ""
+  }
+
+  //--------------------------------------------------------------------------------
+  objref zc_list, zc_list_cache, zcGraph
+  public zc_list, zc_rms, zc_rms_th, zc_dt, zc_look
+  
+  // find zero crossings in [tmin, tmax]
+  func zc_look(){ local tmin, tmax, imin, imax localobj st1, st2, strms
+    tmin = stim_del
+    tmax = stim_del+stim_dur
+    if( numarg() > 0 )  zc_dt = $1
+    if( numarg() > 1 )  zc_rms_th = $2
+    if( numarg() > 2 )  tmin = $3
+    if( numarg() > 3 )  tmax = $4
+    
+    if( dt_sample < 0 ){			// -1 indicates non-uniform sf
+      abort( "eTrace: zc_look Error; sampling frequency is not uniform\n" )
+      return -1
+    }
+    imin = int( 0.5 + tmin / dt_sample )
+    imax = int( 0.5 + tmax / dt_sample )
+    if( imin < 0 ) {
+      printf( "WARNING zc_look; invalid tmin %g set to 0\n", tmin )
+      imin = 0
+      tmin = vec_t.x[imin]
+    }
+    if( imax > vec_t.size-1 ) {
+      printf( "WARNING zc_look; invalid tmax %g set to %g\n", tmax, vec_t.x[vec_t.size-1] )
+      imax = vec_t.size -1 
+      tmax = vec_t.x[imax]
+    }
+
+    zc_list	= new Vector()
+
+    sprint( buf, "dt-%.2f-rms_th-%.2f-tmin%.2ftmax%.2f", zc_dt, zc_rms_th, tmin, tmax )
+    if( 0 == strcmp( buf, zc_cache ) ){		//- Have we done this zc before?
+      zc_list.copy( zc_list_cache )		//- if so, return cached copy
+      return 1
+    }
+
+    stsz	= int( zc_dt / dt_sample )	//- if not, compute anew
+    st1		= new jQueue( stsz )
+    st2 	= new jQueue( stsz )
+    strms 	= new jQueue( stsz*100 )
+    vec_dv.deriv( vec_v, dt_sample, 2 )
+    zc_rms 	= 0
+
+    for i=imin, imax   zc_rms += vec_dv.x[i]^2
+    zc_rms 	= zc_rms  * dt_sample / stim_dur
+    if( idebug ) {
+      zcGraph = new Graph()
+      printf( "zc_look: stsz %g tmin %g imin %d tmax %g imax %d zc_rms %g\n", stsz, tmin, imin, tmax, imax, zc_rms )
+    }
+
+    for i=0, vec_dv.size -1 - stsz {
+      st1.add( vec_dv.x[i] )
+      st2.add( vec_dv.x[i+stsz] )
+      strms.add( vec_dv.x[i] )
+      if( i > imin && i < imax ) {
+	if( st1.pos_count >= stsz && st2.pos_count <= 0 ){  // all stsz positive on left and negative on right
+	  i_rms = (st1.sum2+st2.sum2)/stsz/2 
+	  st_rms = strms.sum2*dt_sample/zc_dt/100
+
+	  if( idebug ) printf( "zc_look: t=> %g i_rms %g th1 %g th2 %g", \
+		vec_t.x[i], i_rms, zc_rms*zc_rms_th, st_rms*zc_rms_th )
+
+	  if( i_rms > zc_rms*zc_rms_th || i_rms > st_rms*zc_rms_th ){
+	    zc_list.append( i )
+	    if( idebug ) {
+	      zcGraph.mark( vec_t.x[i], 0, "o", 10, 2, 1 )	// circle
+	      printf( " Y\n" )
+	    }
+	  } else { 
+	    if( idebug ) {
+	      printf( " No\n" )
+	      zcGraph.mark( vec_t.x[i], 0, "t", 10, 3, 1 )	// triangle
+	    }
+	  }
+	}
+      }
+    }
+    zc_list_cache = new Vector()
+    zc_list_cache.copy( zc_list )		//- cache result
+    zc_cache = buf
+
+    if( idebug ) vec_dv.line( zcGraph, vec_t )
+    return 1
+  }
+  
+  //--------------------------------------------------------------------------------
+  objref spike_i, seg_list, seg_list_cache, seg_Graph
+  public spike_i, seg_list, seg_dt, seg_look, seg_Graph, seg_cache
+  
+  // seg_look( option, tmin, tmax, seg_dt, seg_slp_dt, seg_slp_th )
+  // find fiducial points in [tmin, tmax]
+  proc seg_look(){ local i, option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, slp, islp, slpsz, irf localobj strm1, strm2
+    option 	= $1	// 1111 - ABCD A=t0 B=tdelay C=tdelay+tdur D=tfinal
+    imin 	= $2
+    imax 	= $3
+    seg_dt 	= $4	// 0.4 - spike window size (ms); all points on left >=0 and on righ <= 0
+    seg_slp_dt 	= $5	// 0.1 - time window to compute dv/dt slope
+    seg_slp_th 	= $6	// 300 - spike dv/dt threshold
+    seg_v_th 	= $7	// -10mV - spike v threshold
+    seg_tiny_last = $8	// 3ms - drop fiduciary point if too close to stim-end or end-of-trace
+
+    // -1 indicates non-uniform sf
+    if( dt_sample <= 0 ) abort( "seg_look Error; sampling frequency is not uniform\n" )
+    if( imin < 0 || imax > vec_v.size-1 ) abort( "seg_look Error: imin or imax problem\n" )
+    if( seg_dt < seg_slp_dt ) abort( "seg_look: seg_dt must be >= than seg_slp_dt\n" )
+    if( idebug ) printf( "seg_look: option %d imin %d imax %d _dt %g _slp_dt %g _slp_th %g _v_th %g _tiny_last %g\n",\
+      option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+
+    seg_list	= new Vector()		// not really a list but a vector
+
+    sprint( buf, "dt_sample%g-dt%g-slp_dt%g-slp_th%g-v_th%g-tiny_last%g-imin%g-imax%g-option%g", \
+            dt_sample, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last, imin, imax, option )
+    if( 0 == strcmp( buf, seg_cache ) ){		//- Have we done this before?
+      seg_list.copy( seg_list_cache )		//- if so, return cached copy
+      if( idebug ) printf( "seg_look: returning cached value\n" )
+    }else{
+      
+      stsz	= int( 0.5 + seg_dt / dt_sample )
+      slpsz 	= int( 0.5 + seg_slp_dt / dt_sample )
+      if( idebug ) printf( "seg_look: stsz %g slpsz %g\n", stsz, slpsz )
+      if( slpsz < 1 ) abort( "seg_look Error: seg_slp_dt is too small\n" )
+      strm1	= new jQueue( stsz )
+      strm2 	= new jQueue( stsz )
+      vec_dv.deriv( vec_v, dt_sample, 2 )
+      
+      for i=0, vec_dv.size -1 - stsz {
+	strm1.add( vec_dv.x[i] )
+	strm2.add( vec_dv.x[i+stsz] )
+	if( i >= imin && i <= imax ) {
+	  if( strm1.pos_count >= stsz && strm2.pos_count <= 0 ){  // all stsz positive on left and negative on right
+	    if( idebug ) printf( "seg_look: pos_count passed for i %d t[i] %g strm12 %d %d\n", \
+	    i, vec_t.x[i], strm1.pos_count, strm2.pos_count )
+	    slp = 0	// compute slope at zc
+	    for islp=-slpsz, slpsz slp += -1 * islp * vec_dv.x[i+islp]
+	    slp = slp * 3 / (dt_sample * slpsz*(slpsz+1))
+	    if( slp > seg_slp_th && vec_v.x[i] > seg_v_th ) {
+	      irf = round2best( i, stsz, vec_t, vec_dv )
+	      if( i != irf ) if( idebug ) printf( "seg_look: round2best changed i from %d to %d\n", i, irf )
+	      seg_list.append( irf ) // seg_list.append( i )
+	      if( idebug ) printf( "seg_look: Added   i %d t %g slp %g slp_th %g v[i] %g v_th %g\n", \
+	      i, vec_t.x[i], slp, seg_slp_th, vec_v.x[i], seg_v_th )
+	    }else{
+	      if( idebug ) printf( "seg_look: Ignored i %d t[i] %g slp %g slp_th %g v[i] %g v_th %g\n", \
+	      i, vec_t.x[i], slp, seg_slp_th, vec_v.x[i], seg_v_th )
+
+	      //  if( slp > seg_slp_th ) { printf( "Y " ) 
+	      //  }else { printf( "N " ) }
+	      // printf( "slp t %8g slp %10.2f slpsz %g tm %g tM %g\n", \
+	      //  vec_t.x[i], slp, slpsz, vec_t.x[i-slpsz], vec_t.x[i+slpsz] )
+	    }
+	  }
+	  if( i > imax ) break
+	}
+      }
+      spike_i = seg_list.c
+      seg_nspikes = spike_i.size
+      if( int(option/1000)%10 ) ord_list_insert( imin, imax, imin, seg_list )
+      if( int(option/100)%10 ) ord_list_insert( imin, imax, stim_del/dt_sample, seg_list )
+      if( int(option/10)%10  ) ord_list_insert( imin, imax, (stim_del+stim_dur)/dt_sample, seg_list )
+      if( int(option%10)     ) ord_list_insert( imin, imax, imax, seg_list )
+      
+      if( seg_tiny_last > 0 && int(option/10)%10 && imax > (stim_del+stim_dur)/dt_sample ) \
+        seg_drop_tiny_bfr( (stim_del+stim_dur), seg_tiny_last )
+
+      if( seg_tiny_last > 0 ) seg_drop_tiny_bfr( imax*dt_sample, seg_tiny_last )
+
+      seg_list_cache = new Vector()
+      seg_list_cache.copy( seg_list )		//- cache result
+      seg_cache = buf
+    }
+    if( idebug ){
+      printf( "seg_look: option %d stim_del %g stim_dur %g stsz %g imin %d imax %d\n", \
+      option, stim_del, stim_dur, stsz, imin, imax )
+      for i=0, seg_list.size-1 printf( "%d %g\n", i, vec_t.x[seg_list.x[i]] )
+      if( object_id( seg_Graph )==0 ) seg_Graph = new Graph()
+      seg_Graph.label( name )
+      vec_v.line( seg_Graph, vec_t, 1, 1 )
+      vec_dv.c.mul(0.1).line( seg_Graph, vec_t, 3, 1 )
+      vec_ddv = new Vector()
+      vec_ddv.deriv( vec_dv, dt_sample, 2 )
+      vec_ddv.c.mul(0.01).line( seg_Graph, vec_t, 2, 1 )
+
+      // vec_ddv_sp = ddv_spline()
+      // vec_ddv_sp.c.mul(0.01).line( seg_Graph, vec_t, 4, 1 )
+      
+      for i=0, seg_list.size-1 seg_Graph.mark( vec_t.x[seg_list.x[i]], 0, "o", 10, 2, 1 )	// circle
+      seg_Graph.exec_menu( "View = plot" )
+    }
+  }
+  
+  // find which point is closest to zero
+  func round2best(){ local i, ia, imin, sz localobj vX, vY
+    ia=$1 sz=$2 vX=$o3 vY=$o4
+    
+    imin = ia
+    for i=-sz+ia, sz+ia if( abs(vY.x[i]) < abs(vY.x[imin] )) imin = i
+    return imin
+  }
+
+  //--------------------------------------------------------------------------------
+  // drop the point just before t_v if within stl
+  proc seg_drop_tiny_bfr(){ local i, stl, t_v
+    t_v = $1/dt_sample
+    stl = $2/dt_sample
+    for( i=seg_list.size-1; i>=0 && seg_list.x[i] >= t_v; i=i-1 ){}
+    if( idebug ) printf( "seg_drop_tiny_bfr: t_v %g stl %g i %d seg_list[i] %g\n", t_v, stl, i, seg_list.x[i] )
+    if( i < 0 ) return
+    if( t_v - seg_list.x[i] < stl ) {
+      if( idebug ) printf( "seg_drop_tiny_bfr: dropping tv %g\n", t_v )
+      seg_list.remove( i )
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  proc ord_list_insert(){ local imin, imax, v, i localobj list
+    imin = $1
+    imax = $2
+    v = int( 0.5 + $3)
+    list = $o4
+    if( v < imin || v > imax ) return
+    for i=0, list.size-1 {
+      if( list.x[i] >= v ) break
+    }
+    if( i >= list.size ) {
+      list.insrt( i, v )
+    }else{
+      if( list.x[i] != v ) list.insrt( i, v ) 	// Avoid repetitions
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  proc insert_ends(){
+    zc_list.insrt( 0, stim_del/dt_sample )				// stim starts
+    zc_list.insrt( 0, 0 )						// trace start
+    zc_list.insrt( zc_list.size(), (stim_del+stim_dur)/dt_sample )	// stim ends
+    zc_list.insrt( zc_list.size, vec_t.size-1 )				// trace end
+  } 
+  
+  //--------------------------------------------------------------------------------
+  public trim_at
+  proc trim_at(){ local tmax, ir, d
+    tmax = $1
+    if( tmax > 0 ){ // -1 indicates using end of trace
+      if( tmax < vec_t.x[ zc_list.x[ zc_list.size-1 ]] ){ // need trimming?
+	// locate index of smallest interval at right of tmax
+	for( ir=zc_list.size()-1; ir>=0 && tmax < vec_t.x[ zc_list.x[ir] ]; ir=ir-1 ) d=0
+	zc_list.remove( ir, zc_list.size-1 )
+	zc_list.insrt( zc_list.size, tmax/dt_sample )
+      }
+    }
+  } 
+
+  //--------------------------------------------------------------------------------
+  public zc_insert
+  proc zc_insert( ){ local i
+    nsz = $1
+    idiff = nsz - zc_list.size() 
+    printf( "\n\t==== Inserting %d items\n", idiff )
+    for i=1, idiff {
+      imax = 1
+      for j=2, zc_list.size()-1 if( zc_list.x[j] - zc_list.x[j-1] > zc_list.x[imax] - zc_list.x[imax-1] ) imax = j
+      printf( "\t===== Inserting at %d %g\n", imax, (zc_list.x[imax]+zc_list.x[imax-1])/2 * dt_sample )
+      zc_list.insrt( imax, (zc_list.x[imax]+zc_list.x[imax-1])/2 )
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  // return v,dv,ddv of isolated nspike spike of trace using eD options, set t=0 at tpk, clip [-tL,tR]
+  public iso_spike
+  obfunc iso_spike(){ local i, nspike, tL, tR, tspk localobj eT, eTc, eD, Nil
+    eD = $o1
+    nspike = $2
+    tL = $3
+    tR = $4
+    eT = copy()
+    eT.seg_look( eD.seg_option,0,eT.vec_v.size-1,eD.seg_dt,eD.seg_slp_dt,eD.seg_slp_th,eD.seg_v_th,eD.seg_tiny_last )
+    if( eT.seg_nspikes < nspike ) {
+      printf( "\n\n>>>iso_spike: ERROR cant find nspike %d spike in trace<<<<\n\n", nspike )
+      return Nil
+    }
+    tspk = eT.seg_list.x[nspike+1]* eT.dt_sample	
+    sprint( eT.name, "%s nspk %2d tspk %6.3f", eT.name, nspike, tspk )
+    eT.cut_at2( tspk+tR, tspk+tL )
+    eT.vec_t.add( tL )
+    eT.seg_look( eD.seg_option,0,eT.vec_v.size-1,eD.seg_dt,eD.seg_slp_dt,eD.seg_slp_th,eD.seg_v_th,eD.seg_tiny_last )
+    eT.vec_ddv = new Vector()
+    eT.vec_ddv.deriv( eT.vec_dv, eT.dt_sample, 2 )
+    if( numarg() > 4 ) $&5 = tspk
+    return eT
+  }
+
+  obfunc iso_spike_old(){ local i, nspike, twidth, tspk localobj eT, eTc, eD, Nil
+    eD = $o1
+    nspike = $2
+    twidth = $3
+    eT = copy()
+    eT.seg_look( eD.seg_option,0,eT.vec_v.size-1,eD.seg_dt,eD.seg_slp_dt,eD.seg_slp_th,eD.seg_v_th,eD.seg_tiny_last )
+    if( eT.seg_nspikes < nspike ) {
+      printf( "\n\n>>>iso_spike: ERROR cant find nspike %d spike in trace<<<<\n\n", nspike )
+      return Nil
+    }
+    tspk = eT.seg_list.x[nspike+1]* eT.dt_sample	
+    sprint( eT.name, "%s nspk %2d tspk %6.3f", eT.name, nspike, tspk )
+    eT.cut_at2( tspk+twidth, tspk-twidth )
+    eT.vec_t.add( -twidth )
+    eT.seg_look( eD.seg_option,0,eT.vec_v.size-1,eD.seg_dt,eD.seg_slp_dt,eD.seg_slp_th,eD.seg_v_th,eD.seg_tiny_last )
+    eT.vec_ddv = new Vector()
+    eT.vec_ddv.deriv( eT.vec_dv, eT.dt_sample, 2 )
+    return eT
+  }
+
+  //--------------------------------------------------------------------------------
+  public spike_width
+  // ( ivpk, v_at )
+  func spike_width(){ local ivpk, v_at, iL, iR, m, b, tL, tR
+    ivpk = $1
+    v_at = $2
+
+    if( vec_v.x[ivpk] < v_at ){
+      printf( "spike_width: ERROR v_at %g greater than vpeak %g\n", v_at, vec_v.x[ivpk] )
+      return -1
+    }
+    for( iL=ivpk; iL>1 && vec_v.x[iL] > v_at; iL -= 1 ){}
+    for( iR=ivpk; iR<vec_v.size-2 && vec_v.x[iR] > v_at; iR += 1 ){}
+    if( vec_v.x[iL] > v_at || vec_v.x[iR] > v_at ){
+      printf( "spike_width: ERROR failed to reach v_at %g\n", v_at )
+      return -1
+    }
+    // interpolate between points
+    m = (vec_v.x[iL]-vec_v.x[iL+1]) / (vec_t.x[iL]-vec_t.x[iL+1])
+    b = vec_v.x[iL] - m * vec_t.x[iL]
+    tL = (v_at - b )/m
+
+    m = (vec_v.x[iR]-vec_v.x[iR-1]) / (vec_t.x[iR]-vec_t.x[iR-1])
+    b = vec_v.x[iR] - m * vec_t.x[iR]
+    tR = (v_at - b )/m
+    if( idebug ) printf( "spike_width: vpk %g %g v_at %g t_i t L=> %g %g R=> %g %g\n", \
+    vec_t.x[ivpk], vec_v.x[ivpk], v_at, vec_t.x[iL], tL, vec_t.x[iR], tR )
+
+    return tR-tL
+    
+  }
+
+  //--------------------------------------------------------------------------------
+  objref mat_VdV, VdV_Graph
+  public mat_VdV, get_mat_VdV, VdV_x_m, VdV_x_sz, VdV_y_m, VdV_y_sz, VdV_Graph
+  // get_mat_VdV( x_n, x_m, xM, y_n, y_m, y_M )
+  // 
+  obfunc get_mat_VdV(){ local imin, imax, it, x_n, x_M, x_i, y_n, y_M, y_i, jth
+    imin 	= $1
+    imax	= $2
+    VdV_x_m	= $3	// minimum value
+    x_M		= $4	// Maximum value
+    VdV_x_sz	= $5
+    VdV_y_m	= $6
+    y_M		= $7
+    VdV_y_sz	= $8
+
+    // -1 indicates non-uniform sf
+    if( dt_sample < 0 ) abort( "get_mat_VdV ERROR; sampling frequency is not uniform\n" )
+    if( imin < 0 || imax > vec_v.size-1 ) abort( "get_mat_VdV Error: imin or imax problem\n" )
+
+    sprint( buf, "x_%g-%g-%g_y_%g-%g-%g", VdV_x_m, x_M, VdV_x_sz, VdV_y_m, y_M, VdV_y_sz )
+    if( 0 != strcmp( buf, VdV_cache ) ){		//- Have we done this before?
+      x_n = int( 0.5 + (x_M - VdV_x_m)/VdV_x_sz )
+      y_n = int( 0.5 + (y_M - VdV_y_m)/VdV_y_sz )
+      mat_VdV = new Matrix( x_n, y_n, 2 )		// No. compute matrix (option 2 for sparse)
+      vec_dv.deriv( vec_v, dt_sample, 2 )
+
+      for it=imin, imax {
+	x_i = int( (vec_v.x[it] - VdV_x_m)/VdV_x_sz )
+	y_i = int( (vec_dv.x[it] - VdV_y_m)/VdV_y_sz )
+
+	if( x_i < 0 || x_i >= x_n || y_i < 0 || y_i >= y_n ){
+	//if( x_i < 18 || x_i >= x_n || y_i < 0 || y_i >= y_n ){
+	  //printf( "get_Mat_VdV ERROR: arg out of range (ignored) V %g bin %d dV %g bin %d\n", \
+	  //  vec_v.x[it], x_i, vec_dv.x[it], y_i )
+	}else{ 
+	  mat_VdV.x[x_i][y_i] += 1
+	}
+      }
+      VdV_cache = buf
+    }
+    if( idebug ){
+      if( object_id( VdV_Graph )==0 ) VdV_Graph = new Graph()
+      VdV_Graph.label( name )
+      printf( "get_mat_VdV: imin %d imax %d x_mMz %g %g %g ymMz %g %g %g\n", \
+      imin, imax, VdV_x_m, x_M, VdV_x_sz, VdV_y_m, y_M, VdV_y_sz )
+      for x_i=0, mat_VdV.nrow-1 {
+	for jth=0, mat_VdV.sprowlen(x_i)-1 {
+	  val = mat_VdV.spgetrowval( x_i, jth, &y_i )
+
+	  if( idebug > 2 ) printf( "get_mat_VdV: xy_i %g %g xyv %g %g %g\n", \
+	  x_i, y_i, x_i*VdV_x_sz + VdV_x_m, y_i*VdV_y_sz + VdV_y_m, val )
+
+	  VdV_Graph.mark( x_i*VdV_x_sz + VdV_x_m, y_i*VdV_y_sz + VdV_y_m, "+", min(1+val,99) )
+	}
+      }
+      VdV_Graph.exec_menu( "View = plot" )
+    }
+    return mat_VdV
+  }
+
+  //--------------------------------------------------------------------------------
+  public max
+  func max(){ local i, im
+    im = $1
+    for i=1, numarg() if( $i>im ) im = $i
+    return im
+  }
+
+  public min
+  func min(){ local i, im
+    im = $1
+    for i=1, numarg() if( $i<im ) im = $i
+    return im
+  }
+
+  //--------------------------------------------------------------------------------
+  public plot_VdV
+  proc plot_VdV(){ localobj pG, VdV_m
+    pG = $o1
+    VdV_m = mat_VdV
+    if( numarg() > 1 ) VdV_m = $o2
+    for i=0, VdV_m.nrow-1 {
+      for jth=0, VdV_m.sprowlen(i)-1 {
+	val = VdV_m.spgetrowval( i, jth, &j )
+	pG.mark( VdV_x_m + (i+0.5)*VdV_x_sz, VdV_y_m+ (j+0.5)*VdV_y_sz, "o", log(val+1)+3 )
+      }
+    }
+    vec_dv.line( pG, vec_v )
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Return array of AP amplitudes using 'elbow' when spike takes off
+  // assumes seg_look has been called (uses seg_list)
+  public ampAPe
+  obfunc ampAPe(){ local i, pki, bl_pki, ibefore, ms_before, xtrR, xtraL, option localobj AP
+    option 	= $1	// option used in seg_look call; 1111 - ABCD A=t0 B=tdelay C=tdelay+tdur D=tfinal
+    ms_before	= $2	// 1.5; ms before peak to use for baseline
+    
+    ibefore = ms_before/dt_sample
+    AP = new Vector()
+    xtraL = xtraR = 0
+    for i=0,1 xtraR += int(option/10^i%10)
+    for i=2,3 xtraL += int(option/10^i%10)
+    
+    if( idebug ) printf( "ampAPe: option %g ms_before %g ibefore %g\n", option, ms_before, ibefore )
+    if( idebug ) printf( "ampAPe: xtraL %g R %g seg_list.sz %d\n", xtraL, xtraR, seg_list.size )
+    for i=xtraL, seg_list.size-xtraR-1 {
+      pki = seg_list.x[i]
+      bl_pki = max( 0, pki - ibefore )
+      AP.append( vec_v.x[pki] - vec_v.x[bl_pki ] )
+      if( idebug ) printf( "ampAPe: %d AP %g mV %g ms Vpk %g mV BL %g mV \n", \
+        i, AP.x[AP.size-1], vec_t.x[pki], vec_v.x[pki], vec_v.x[bl_pki] )
+    }
+ 
+    return AP
+  }
+endtemplate eTrace
+
+//================================================================================
+begintemplate eDistance
+
+  objref this, tr1, tr2, gdist
+  strdef buf
+  public alpha, sib, idebug, default_dt_sample, stim_del, stim_dur
+  public tmax, zc_dt, zc_rms_th, d4_winsz, th_spike, w_spk_n, w_spk_23
+  public dist, dist1, dist2, dist3
+  public dist45, dist4, dist5, dist6, dist7, dist8, dist9
+  public unify_dt_sample
+  //--------------------------------------------------------------------------------
+  proc init(){
+    default_dt_sample	= 0.05		//- sampling freq to use if both traces have variable sample rates
+    zc_dt	= 0.4
+    zc_rms_th	= 0			// 2
+    alpha	= 0.1			//- dist_1 constant
+    tmax	= -1			// -1 to indicate end of trace
+    sib		= 0.5			//- shape interval bias; [1=all_shape 0.5=neutral 0=all_interval]
+    stim_del	= 20
+    stim_dur	= 500
+    d4_winsz	= 0.03			//- size of spike match window (percent of trace length)
+    idebug	= 0
+
+    NoZCPenalty = 500			// Penalty for not having at least one spike 
+    th_spike	= -10			// threshold to detect spikes
+    w_spk_n	= 1			// weight spike number: 1=1 (contant); 2=1/n
+    w_spk_23	= 1			// weight spike factor for intervals 2 and 3 
+  }
+  //--------------------------------------------------------------------------------
+  func dist(){			//- dist( tr1, tr2 ) Measure distance between eTrace tr1 and tr2
+    tr1	= $o1
+    tr2	= $o2
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+
+    if( idebug ){
+      sprint( buf, "%s", gdist )
+      print "gdist ", buf
+      if( 0 == strcmp( buf, "NULLobject" )) gdist	= new Graph()
+      gdist.erase_all()
+      gdist.family( 1 )
+      gdist.color( 1 )
+      tr1.vec_v.line( gdist, tr1.vec_t )
+      gdist.label( tr1.name )
+      gdist.color( 2 )
+      tr2.vec_v.line( gdist, tr2.vec_t )
+      gdist.label( tr2.name )
+    }
+    
+    tr1.zc_look( zc_dt, zc_rms_th )
+    tr2.zc_look( zc_dt, zc_rms_th )
+
+    if( idebug ){
+      printf( "BEFORE tr1.zc_list " )
+      for i=0, tr1.zc_list.size()-1 printf( "%d:%.2f ", i, tr1.vec_t.x[ tr1.zc_list.x[i] ] )
+      printf( "\nBEFOREtr2.zc_list " )
+      for i=0, tr2.zc_list.size()-1 printf( "%d:%.2f ", i, tr2.vec_t.x[ tr2.zc_list.x[i] ] )
+      printf( "\n" )
+    }
+
+    zc_augment()		//- Make sure both traces have equal number of interval points; add if necessary
+    tr1.trim_at( tmax )		//- remove points beyond tmax
+    tr2.trim_at( tmax )		//- remove points beyond tmax
+
+    if( idebug ){
+      printf( "AFTER tr1.zc_list " )
+      for i=0, tr1.zc_list.size()-1 printf( "%d:%.2f ", i, tr1.vec_t.x[ tr1.zc_list.x[i] ] )
+      printf( "\nAFTER tr2.zc_list " )
+      for i=0, tr2.zc_list.size()-1 printf( "%d:%.2f ", i, tr2.vec_t.x[ tr2.zc_list.x[i] ] )
+      printf( "\n" )
+    }
+
+    dist1 = dist2 = dist3 = 0
+
+    for ib=1, tr1.zc_list.size()-1 {
+      b1i	= tr1.zc_list.x[ib-1]		
+      b1f	= tr1.zc_list.x[ib]
+      b1sz	= b1f - b1i
+      b2i	= tr2.zc_list.x[ib-1]
+      b2f	= tr2.zc_list.x[ib]
+      b2sz 	= b2f - b2i
+      m		= b2sz / b1sz
+      b		= b2i - m * b1i
+
+      sqerr_dt 	= 0
+      for i=b1i, b1f {		//- transform tr2 intvl into tr1 interval and integrate difference
+	i2	= int( 0.5 + (m*i + b) )
+	sqerr_dt += ( tr2.vec_v.x[ i2 ] - tr1.vec_v.x[ i ] )^2
+	if( idebug ) printf( "i %d i2 %d v1 %g v2 %g sqerr1 %g\n", i, i2, tr1.vec_v.x[i], tr2.vec_v.x[i2], sqerr1 )
+      }
+      sqerr_01 = sqerr_dt * dt_sample / b1sz			//- sqerr when traces mapped to [0,1] domain
+      intvl_diff = ( b1sz - b2sz ) * dt_sample
+      intvl_avg = (b1sz + b2sz ) * dt_sample / 2
+
+      idist1 = intvl_avg * sqrt( sqerr_01 ) * (1 + alpha * intvl_diff^2 )
+      idist2 = intvl_avg * sqrt( (1-sib)* sqerr_01 + sib* intvl_diff^2 )
+      idist3 = intvl_avg * ( (1-sib)* sqerr_01 + sib* intvl_diff^2 )
+
+      printf( "%2d tr1 %6.2f %6.2f tr2 %6.2f %6.2f diff %5.2f sqerr_01 %5.3f intvl_dif^2 %6.3f d2 %6.2f d3 %6.2f\n", \
+	ib, \
+	tr1.vec_t.x[ b1i ], b1sz*dt_sample, \
+	tr2.vec_t.x[ b2i ], b2sz*dt_sample, abs(b1sz-b2sz)*dt_sample, \
+	sqerr_01, intvl_diff^2, \
+	idist2, idist3 )
+
+      dist1 += idist1
+      dist2 += idist2
+      dist3 += idist3
+    }
+    dist3 = sqrt( dist3 )
+    sprint( buf, "dist_1 = %g dist2 = %g dist3 = %g", dist1, dist2, dist3 )
+    gdist.label( buf )
+    return dist1
+  }
+
+  //--------------------------------------------------------------------------------
+  proc zc_augment( ){ local i		//- Check both traces have same # of zc's. add endpoints
+    if( tr1.zc_list.size() > tr2.zc_list.size() ) tr2.zc_insert( tr1.zc_list.size() )
+    if( tr1.zc_list.size() < tr2.zc_list.size() ) tr1.zc_insert( tr2.zc_list.size() )
+
+    tr1.insert_ends( )
+    tr2.insert_ends( )
+  }
+  //--------------------------------------------------------------------------------
+  func dist45(){			//- d4( tr1, tr2 ) Measure distance between eTrace tr1 and tr2
+    tr1	= $o1
+    tr2	= $o2
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+    verify_stims( tr1, tr2 )
+    
+    if( idebug ){
+      sprint( buf, "%s", gdist )
+      print "gdist ", buf
+      if( 0 == strcmp( buf, "NULLobject" )) gdist	= new Graph()
+      gdist.erase_all()
+      gdist.family( 1 )
+      gdist.color( 1 )
+      tr1.vec_v.line( gdist, tr1.vec_t )
+      gdist.label( tr1.name )
+      gdist.color( 2 )
+      tr2.vec_v.line( gdist, tr2.vec_t )
+      gdist.label( tr2.name )
+    }
+    
+    tr1.zc_look( zc_dt, zc_rms_th )
+    tr2.zc_look( zc_dt, zc_rms_th )
+
+    if( idebug ){
+      printf( "BEFORE tr1.zc_list " )
+      for i=0, tr1.zc_list.size()-1 printf( "%d:%.2f ", i, tr1.vec_t.x[ tr1.zc_list.x[i] ] )
+      printf( "\nBEFOREtr2.zc_list " )
+      for i=0, tr2.zc_list.size()-1 printf( "%d:%.2f ", i, tr2.vec_t.x[ tr2.zc_list.x[i] ] )
+      printf( "\n" )
+    }
+
+    tr1.insert_ends()
+    tr2.insert_ends()
+    tr1.trim_at( tmax )		//- remove points beyond tmax
+    tr2.trim_at( tmax )		//- remove points beyond tmax
+
+    if( idebug ){
+      printf( "AFTER tr1.zc_list " )
+      for i=0, tr1.zc_list.size()-1 printf( "%d:%.2f ", i, tr1.vec_t.x[ tr1.zc_list.x[i] ] )
+      printf( "\nAFTER tr2.zc_list " )
+      for i=0, tr2.zc_list.size()-1 printf( "%d:%.2f ", i, tr2.vec_t.x[ tr2.zc_list.x[i] ] )
+      printf( "\n" )
+    }
+    
+    id4_winsz 	= d4_winsz * (tr1.vec_t.size -1)
+    dist4 = dist5 = dist6 = dist7 = dist8 = dist9 = 0
+
+    iM1 = iM2	= 1
+    im1 = im2	= 0
+    while( iM1 < tr1.zc_list.size() && iM2 < tr2.zc_list.size() ){
+      zi1 = tr1.zc_list.x[iM1]
+      zi2 = tr2.zc_list.x[iM2]
+      if( idebug>1 ) printf( "iM1 %g im1 %g iM2 %g im2 %g zi1 %g zi2 %g\n", \
+          iM1, im1, iM2, im2, zi1, zi2 )
+      if( abs( zi1 - zi2 ) > id4_winsz ){
+	if( zi1 < zi2 ) { 
+	  iM1 += 1 
+	}else{ 
+	  iM2 += 1
+ 	}
+	continue
+      }
+      //- Look ahead for better match
+//      while( iM2+1 < tr2.zc_list.size() ){
+//	if( abs(zi1-zi2) > abs( zi1 - tr2.zc_list.x[iM2+1] ) ){ iM2+=1 
+//	}else{ break }
+//      }
+
+      b1i	= tr1.zc_list.x[im1]		
+      b1f	= tr1.zc_list.x[iM1]
+      b1sz	= b1f - b1i
+      b2i	= tr2.zc_list.x[im2]
+      b2f	= tr2.zc_list.x[iM2]
+      b2sz 	= b2f - b2i
+      m		= b2sz / b1sz
+      b		= b2i - m * b1i
+
+      err_dt = sqerr_dt 	= 0
+      for i=b1i, b1f {		//- transform tr2 intvl into tr1 interval and integrate difference
+	imb	= int( 0.5 + (m*i + b) )
+	err_dt += abs( tr2.vec_v.x[ imb ] - tr1.vec_v.x[ i ] )
+	sqerr_dt +=  ( tr2.vec_v.x[ imb ] - tr1.vec_v.x[ i ] )^2
+	if( idebug>2 ) printf( "i %d imb %d v1 %g v2 %g \n", i, imb, tr1.vec_v.x[i], tr2.vec_v.x[imb] )
+      }
+      err_01 = err_dt * dt_sample / b1sz			//- err when traces mapped to [0,1] domain
+      sqerr_01 = sqerr_dt * dt_sample / b1sz			//- sqerr when traces mapped to [0,1] domain
+      intvl_diff = ( b1sz - b2sz ) * dt_sample
+      intvl_avg = (b1sz + b2sz ) * dt_sample / 2
+
+      idist4 = intvl_avg * sqrt( (1-sib)* sqerr_01 + sib* intvl_diff^2 )
+      idist5 = intvl_avg * ( (1-sib)* sqerr_01 + sib* intvl_diff^2 )
+
+      idist6 = intvl_avg * sqrt((1-sib)* sqerr_01) + sqrt( sib* intvl_diff^2 )
+      idist7 = intvl_avg * (1-sib)* sqerr_01 + sib* intvl_diff^2 
+
+      idist8 = intvl_avg * (1-sib)* err_01 + abs(sib* intvl_diff)
+      idist9 = intvl_avg * (1-sib)* err_01^2 + sib* intvl_diff^2
+
+      if( idebug ) \
+        printf( "%2d tr1 %6.2f %6.2f tr2 %6.2f %6.2f diff %5.2f sqerr_01 %5.3f intvl_dif^2 %6.3f d6 %6.2f d7 %6.2f d8 %6.2f d9 %6.2f\n",\
+	iM1, \
+	tr1.vec_t.x[ b1i ], b1sz*dt_sample, \
+	tr2.vec_t.x[ b2i ], b2sz*dt_sample, abs(b1sz-b2sz)*dt_sample, \
+	sqerr_01, intvl_diff^2, \
+	idist6, idist7, idist8, idist9 )
+	
+      w_spk = 1
+      if( w_spk_n == 2  ) {
+	w_spk = 1/iM1
+      }
+      if( iM1==2 || iM1==3 ) w_spk *= w_spk_23
+
+      dist4 += idist4 * w_spk
+      dist5 += idist5 * w_spk
+      dist6 += idist6 * w_spk
+      dist7 += idist7 * w_spk
+      dist8 += idist8 * w_spk
+      dist9 += idist9 * w_spk
+
+      im1 = iM1
+      iM1 += 1
+      im2 = iM2
+      iM2 += 1
+    }
+    dist5 = sqrt( dist5 )
+    dist7 = sqrt( dist7 )
+    // dist9 = sqrt( dist9 )
+    if( idebug ){
+      sprint( buf, "dist45 ==>> d4 = %g d5 = %g d6 = %g d7 = %g d8 = %g d9 = %g", \
+              dist4, dist5, dist6, dist7, dist8, dist9 )
+      printf( "%s\n", buf )
+      gdist.label( buf )
+    }
+    return dist1
+  }
+  
+  //--------------------------------------------------------------------------------
+  public dist_zcP, NoZCPenalty
+  
+  func dist_zcP(){			//- penalty for no zc
+    tr1	= $o1
+    tr2	= $o2
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+    
+    tr1.zc_look( zc_dt, zc_rms_th )
+    tr2.zc_look( zc_dt, zc_rms_th )
+    
+    printf( "dist_ZCP tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+    if( tr1.zc_list.size == 0 || tr2.zc_list.size == 0 ){
+      printf( "NoZCPenalty invoked tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+      dist45( tr1, tr2 )
+      dist4 += NoZCPenalty
+      dist5 += NoZCPenalty
+      dist6 += NoZCPenalty
+      dist7 += NoZCPenalty
+      dist8 += NoZCPenalty
+      dist9 += NoZCPenalty
+      return 1
+    } else {
+      dist45( tr1, tr2 )
+      return 1      
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  public dist_zcEq
+  
+  func dist_zcEq(){			//- penalty for unequal #zc
+    tr1	= $o1
+    tr2	= $o2
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+    
+    tr1.zc_look( zc_dt, zc_rms_th )
+    tr2.zc_look( zc_dt, zc_rms_th )
+    
+    minzcDiff = 3
+    printf( "dist_zcEq tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+    if( tr1.zc_list.size != tr2.zc_list.size ){
+      printf( "NoZCPenalty invoked tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+      zcDiff = abs(tr1.zc_list.size - tr2.zc_list.size)
+      if( zcDiff < minzcDiff ) zcDiff = 0
+      Pen = zcDiff * NoZCPenalty
+      dist45( tr1, tr2 )
+      dist4 += Pen
+      dist5 += Pen
+      dist6 += Pen
+      dist7 += Pen
+      dist8 += Pen
+      dist9 += Pen
+      return 1
+    } else {
+      dist45( tr1, tr2 )
+      return 1      
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  public dist_zcP2
+  
+  func dist_zcP2(){			//- penalty for no zc
+    tr1	= $o1
+    tr2	= $o2
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+    
+    tr1.zc_look( zc_dt, zc_rms_th )
+    tr2.zc_look( zc_dt, zc_rms_th )
+    
+    printf( "dist_zcP2 tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+
+    if( ( tr1.zc_list.size == 0 && tr2.zc_list.size > 0 ) || \
+        ( tr2.zc_list.size == 0 && tr1.zc_list.size > 0 ) ){
+	  
+      printf( "NoZCPenalty (zcP@) invoked tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+      dist45( tr1, tr2 )
+      dist4 += NoZCPenalty
+      dist5 += NoZCPenalty
+      dist6 += NoZCPenalty
+      dist7 += NoZCPenalty
+      dist8 += NoZCPenalty
+      dist9 += NoZCPenalty
+      return 1
+    } else {
+      dist45( tr1, tr2 )
+      return 1      
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  public dist_1spike
+  
+  func dist_1spike(){ local Penalty, tdur		//- penalty for no zc
+    tr1	= $o1
+    tr2	= $o2
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+    
+    tdur = tr1.stim_dur + 2	// hack to deal with a spike slightly after the end of pulse
+
+    tr1.zc_look( zc_dt, zc_rms_th, tr1.stim_del, tr1.stim_del + tdur )
+    tr2.zc_look( zc_dt, zc_rms_th, tr1.stim_del, tr2.stim_del + tdur )
+    
+    printf( "dist_1spike tr1_zc %g tr2_zc %g\n", tr1.zc_list.size, tr2.zc_list.size )
+    
+    Penalty = NoZCPenalty
+    if( tr1.zc_list.size == 1 && tr2.zc_list.size == 1 ){
+      printf( "dist_1spike tr1-pk %g tr2-pk %g\n", tr1.vec_v.x[ tr1.zc_list.x[0]], tr2.vec_v.x[ tr2.zc_list.x[0]] )
+      if( (tr1.vec_v.x[ tr1.zc_list.x[0]] > th_spike && tr2.vec_v.x[ tr2.zc_list.x[0]] > th_spike) || \
+          (tr1.vec_v.x[ tr1.zc_list.x[0]] < th_spike && tr2.vec_v.x[ tr2.zc_list.x[0]] < th_spike) ){
+	Penalty = 0
+      } 
+    }
+    
+    dist45( tr1, tr2 )
+    dist6 += Penalty
+    dist7 += Penalty
+    dist8 += Penalty
+    dist9 += Penalty
+    if( idebug ) printf( "dist_1spike ==>> dist6 = %g dist7 %g dist8 %g dist9 %g\n", dist6, dist7, dist8, dist9 )
+    return 1
+  }
+
+  //--------------------------------------------------------------------------------
+  // adjust to the one with fixed or faster sf
+  //   if both variable use default_dt_sample for both
+  func unify_dt_sample(){ localobj trA, trB, t_aux
+    trA = $o1
+    trB = $o2
+    if( idebug > 1) printf( "Enter unify_dt_sample A %g B %g\n", trA.dt_sample, trB.dt_sample )
+    if( trA.dt_sample == trB.dt_sample ){
+      if( trA.dt_sample > 0 ) return 1		//- OK; both equal and uniform
+      if( idebug > 1 ) printf( "eDistance: Warning. Both traces have variable sampling rates\n " )
+      t_aux = new Vector()
+      t_aux.indgen( trA.vec_t.x[0], trA.vec_t.x[trA.vec_t.size()-1], default_dt_sample )
+      resample( t_aux, trA )
+      resample( t_aux, trB )
+    }else{	// different sampling rates; At least one is fixed
+      if( trA.dt_sample < 0 || \
+	  (trA.dt_sample*trB.dt_sample > 0 && trA.dt_sample > trB.dt_sample )) { 
+	resample( trB.vec_t, trA ) 
+      }else{ 
+	resample( trA.vec_t, trB ) 
+      }
+      if( idebug > 1) printf( "Exit unify_dt_sample A %g B %g\n", trA.dt_sample, trB.dt_sample )
+    }
+    return 1
+  }
+  
+  //--------------------------------------------------------------------------------
+  // return 1 if stim parameters are same
+  func verify_stims(){
+    if( $o1.stim_del != $o2.stim_del || $o1.stim_dur != $o2.stim_dur || $o1.stim_amp != $o2.stim_amp ) {
+      printf( "eDistance: WARNING stimulation parameters differ del %g %g dur %g %g amp %g %g\n", \
+        $o1.stim_del, $o2.stim_del, $o1.stim_dur, $o2.stim_dur, $o1.stim_amp, $o2.stim_amp )
+      return 0
+    }
+    return 1
+  }
+  
+  //--------------------------------------------------------------------------------
+  public resample
+  proc  resample(){		//- resample( new_time_vec, eTrace )
+    $o2.vec_v.interpolate( $o1, $o2.vec_t )
+    $o2.vec_t = $o1.c
+    $o2.dt_sample = $o1.x[1] - $o1.x[0]
+  }
+  
+  //--------------------------------------------------------------------------------
+  public iss_test, iss_unstable_penalty, iss_dV, iss_unstable_th
+  strdef tstr
+  func iss_test(){ local res
+    // test if iss was used in init and if so check if unstable
+    res = -1
+    iss_unstable_penalty = iss_dV = iss_unstable_th = 0
+    sprint( tstr, "%s.iss_dV=name_declared(\"iss_dV\")", this )
+    execute( tstr )
+    if( iss_dV == 5 ){	// we have iss init
+      sprint( tstr, "%s.iss_dV=iss_dV", this )
+      execute( tstr )
+      sprint( tstr, "%s.iss_unstable_th=iss_unstable_th", this )
+      execute( tstr )
+      sprint( tstr, "%s.iss_unstable_penalty=iss_unstable_penalty", this )
+      execute( tstr )
+      printf( "iss_dV %g iss_uns_th %g iss_uns_pen %g\n", iss_dV, iss_unstable_th, iss_unstable_penalty )
+      if( iss_dV > iss_unstable_th ) res = iss_dV / iss_unstable_th * iss_unstable_penalty
+    }
+    return res
+  }
+
+  //--------------------------------------------------------------------------------
+  public d0, d2, d3, d4, d5, d6, d7, msqerr, d6_zcP, d6_zcP2
+  func d0(){
+    unify_dt_sample( $o1, $o2 )
+    dist0 = iss_test()
+    if( dist0 == -1 ) dist0 = sqrt( $o1.vec_v.meansqerr( $o2.vec_v ))
+    if( idebug ) printf( "d0 is %g\n", dist0 )
+    return dist0
+  }
+  func d2(){
+    dist( $o1, $o2 )
+    return dist2 
+  }
+  func d3(){
+    dist( $o1, $o2 )
+    return dist3
+  }
+  func d4(){
+    dist45( $o1, $o2 )
+    return dist4
+  }
+  func d5(){
+    dist45( $o1, $o2 )
+    return dist5
+  }
+  func d6(){
+    dist6 = iss_test()
+    if( dist6 == -1 ) dist45( $o1, $o2 )
+    return dist6
+  }
+  func d6_zcP(){
+    dist6 = iss_test()
+    if( dist6 == -1 ) dist_zcP( $o1, $o2 )
+    return dist6
+  }
+  func d6_zcP2(){
+    dist6 = iss_test()
+    if( dist6 == -1 ) dist_zcP2( $o1, $o2 )
+    return dist6
+  }
+  public d6_1spike
+  func d6_1spike(){
+    dist6 = iss_test()
+    if( dist6 == -1 ) dist_1spike( $o1, $o2 )
+    if( idebug ) printf( "d6_1spike = %g\n", dist6 )
+    return dist6
+  }
+  func d7(){
+    dist7 = iss_test()
+    if( dist7 == -1 ) dist45( $o1, $o2 )
+    return dist7
+  }
+  public d7_zcP
+  func d7_zcP(){
+    dist7 = iss_test()
+    if( dist7 == -1 ) dist_zcP( $o1, $o2 )
+    printf( "d7_zcP %g\n", dist7 )
+    return dist7
+  }
+  public d7_zcEq
+  func d7_zcEq(){
+    dist7 = iss_test()
+    if( dist7 == -1 ) dist_zcEq( $o1, $o2 )
+    return dist7
+  }
+  public d7_1spike
+  func d7_1spike(){
+    dist7 = iss_test()
+    if( dist7 == -1 ) dist_1spike( $o1, $o2 )
+    if( idebug ) printf( "d7_1spike = %g\n", dist7 )
+    return dist7
+  }
+  
+  public d8
+  func d8(){
+    dist8 = iss_test()
+    if( dist8 == -1 ) dist45( $o1, $o2 )
+    return dist8
+  }
+  public d8_zcP
+  func d8_zcP(){
+    dist8 = iss_test()
+    if( dist8 == -1 ) dist_zcP( $o1, $o2 )
+    return dist8
+  }
+  public d8_1spike
+  func d8_1spike(){
+    dist8 = iss_test()
+    if( dist8 == -1 ) dist_1spike( $o1, $o2 )
+    if( idebug ) printf( "d8_1spike = %g\n", dist8 )
+    return dist8
+  }
+  
+  public d9
+  func d9(){
+    dist9 = iss_test()
+    if( dist9 == -1 ) dist45( $o1, $o2 )
+    return dist9
+  }
+  public d9_zcP
+  func d9_zcP(){
+    dist9 = iss_test()
+    if( dist9 == -1 ) dist_zcP( $o1, $o2 )
+    return dist9
+  }
+  public d9_1spike
+  func d9_1spike(){
+    dist9 = iss_test()
+    if( dist9 == -1 ) dist_1spike( $o1, $o2 )
+    if( idebug ) printf( "d9_1spike = %g\n", dist9 )
+    return dist9
+  }
+  
+  d3Gr = 0
+  public d3Gs, d3Gr
+  func d3Gs(){ localobj so
+    so = new str_obj()
+    sprint( so.s1, "%s.d3Gr = d3Gv()", this )
+    execute( so.s1 )
+    return d3Gr
+  }
+
+  //--------------------------------------------------------------------------------
+  public listD 
+  objref listD_list, listD_tr
+  strdef cmdstr, d_choice
+  // compute the avg distance between listD_tr and traces in listD_list
+  func listD(){ local i, davg 
+    d_choice = $s1
+    listD_tr = $o2
+    listD_list = $o3
+    davg_i = davg = 0
+    for i=0, listD_list.count-1 {
+      sprint( cmdstr, "davg_i = %s( listD_tr, listD_list.object(%d) )", d_choice, i )
+      if( idebug ) printf( "cmdstr %s\n", cmdstr )
+      execute( cmdstr, this )
+      if( idebug ) printf( "davg_i = %g\n", davg_i )
+      davg += davg_i
+    }
+    if( idebug ) printf( "listD(%s) = %g\n", d_choice, davg/listD_list.count )
+    return davg/listD_list.count
+  }    
+
+endtemplate eDistance
+
+//================================================================================
+begintemplate eMatch
+
+  objref this, tr1, tr2, Gmatch, Gsegs, GdV, GdVsh
+  objref tr1M, tr2M, tr12M_isz1, tr12M_isz2, tr12M_iavg
+  strdef buf
+  public tmp, tr1, tr2, Gmatch, Gsegs, GdV, GdVsh, idebug, ilog, default_dt_sample
+  public seg_option, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last, tmin, tmax
+  public eta, alpha, beta, gamma, gamma_1, gamma, gamma_2, theta, delta, delta_1, delta_2, theta, theta_1, theta_2
+  public  mF1, mF2, iota, iota_1, iota_2, phi, phi_1, phi_2, chi, chi_1, chi_2
+  public match_dt, match_dt_min, match_dt_max, match_dt_n, match_option, match_mTh, match_max
+  public unify_dt_sample
+  public shape_err, D_p, D_pm, intvl_err, penalty_err
+  public VdV_x_m, VdV_x_M, VdV_x_sz, VdV_y_m, VdV_y_M, VdV_y_sz 
+  public Dph_x_m, Dph_x_M, Dph_x_sz, Dph_y_m, Dph_y_M, Dph_y_sz 
+  public DVP_q
+  public ampAPe_before_ms, bAP_option, bAP_FAP_penalty, bAP_LAP_penalty, bAP_F, bAP_L
+  //--------------------------------------------------------------------------------
+  proc init(){
+    tmp		= 0			// temporary variable 
+    idebug	= 0
+    ilog	= 0
+    default_dt_sample	= 0.05		// (ms) sampling freq to use if both traces have variable sample rates
+
+    seg_option	= 1111			// seg option (see seg_look)
+    seg_dt	= 0.4			// (ms) time delta for zc before and after (see seg_look)
+    seg_slp_dt	= 0.1			// (ms) time window to compute dv/dt slope
+    seg_slp_th	= 300			// spk dv/dt slope threshold
+    seg_v_th	= -10			// spk v threshold
+    seg_tiny_last = 3			// (ms) drop last point before end of pulse or end-of-trace
+
+    tmin	= -1			// (ms) min value (-1=>min value)
+    tmax	= -1			// (ms) max value (-1=>max value)
+
+    match_option = 4
+    match_dt 	= 20			// (ms); time delta for segment matching (see seg_match)
+    match_mTh	= 0			// 1 => enable mTh as min of tr1 and tr2 nsegs (see get_matches)
+    match_max	= 10000			// maximum number of candidates generated by all_match
+    match_dt_min = 0
+    match_dt_max = 40
+    match_dt_n 	= 20
+    
+    eta		= 1
+    alpha	= 1
+    beta	= 1
+    gamma	= 0
+    gamma_1	= gamma_2 = -1
+    delta	= 0
+    delta_1	= delta_2 = -1
+    theta = theta_1 = theta_2 = 0
+    iota = iota_1 = iota_2 = 0
+    phi = phi_1 = phi_2 = 0
+    chi = chi_1 = chi_2 = 0
+
+    mF1		= 0			// match factors 1, 2 ...
+    mF2		= 0
+
+    pkP		= 2000			// spike penalty in m1_pkP and DfpwPk
+    pkPs	= 1
+    pkPsA	= 0
+
+    NoZCPenalty = 500			// Penalty for not having at least one spike 
+    th_spike	= -10			// threshold to detect spikes
+    w_spk_n	= 1			// weight spike number: 1=1 (contant); 2=1/n
+    w_spk_23	= 1			// weight spike factor for intervals 2 and 3 
+    
+    VdV_x_m	= -100
+    VdV_x_M	= 60
+    VdV_x_sz	= 2
+    VdV_y_m	= -1000
+    VdV_y_M	= 1000
+    VdV_y_sz	= 10
+
+    Dph_x_m	= -100
+    Dph_x_M	= 60
+    Dph_x_sz	= 2
+    Dph_y_m	= -1000
+    Dph_y_M	= 1000
+    Dph_y_sz	= 10
+
+    D_p	= 1			// exponent (optional) in eval_match
+    D_pm = 1
+    
+    DVP_q = 0
+    
+    ampAPe_before_ms = 1.5	// ms before APpeak to use as baseline for amplitude (see ampAPe)
+    bAP_option		= 0	// 0=FML (first,middle,last) 1=F*f^i
+    bAP_FAP_penalty	= 1000
+    bAP_LAP_penalty	= 1000
+    bAP_F		= 500
+    bAP_L		= 500
+    bAP_v_th_delta	= -40	// add to seg_v_th to detect spikes on dendritic trace
+  }
+  
+  //--------------------------------------------------------------------------------
+  public resample
+  proc  resample(){		//- resample( new_time_vec, eTrace )
+    $o2.vec_v.interpolate( $o1, $o2.vec_t )
+    $o2.vec_t = $o1.c
+    $o2.dt_sample = $o1.x[1] - $o1.x[0]
+  }
+  
+  //--------------------------------------------------------------------------------
+  // adjust to the one with fixed or faster sf
+  //   if both variable use default_dt_sample for both
+  proc unify_dt_sample(){ localobj trA, trB, t_aux
+    trA = $o1
+    trB = $o2
+    if( idebug > 1) printf( "Enter unify_dt_sample A %g B %g\n", trA.dt_sample, trB.dt_sample )
+    if( trA.dt_sample == trB.dt_sample ){
+      if( trA.dt_sample > 0 ) return		//- OK; both equal and uniform
+      if( idebug > 1 ) printf( "eMatch: Warning. Both traces have variable sampling rates\n " )
+      t_aux = new Vector()
+      t_aux.indgen( trA.vec_t.x[0], trA.vec_t.x[trA.vec_t.size()-1], default_dt_sample )
+      resample( t_aux, trA )
+      resample( t_aux, trB )
+    }else{	// different sampling rates; At least one is fixed
+      if( trA.dt_sample < 0 || \
+	  (trA.dt_sample*trB.dt_sample > 0 && trA.dt_sample > trB.dt_sample )) { 
+	resample( trB.vec_t, trA ) 
+      }else{ 
+	resample( trA.vec_t, trB ) 
+      }
+      if( idebug > 1) printf( "Exit unify_dt_sample A %g B %g\n", trA.dt_sample, trB.dt_sample )
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  objref match1_list, match2_list
+  public match1_list, match2_list, seg_match_T, seg_match_121, seg_match_D, seg_match_A
+  
+  proc seg_match(){ local im1
+    if( match_option == 1 ) seg_match_T( )
+    if( match_option == 2 ) seg_match_121( )
+    if( match_option == 3 ) seg_match_D( )
+    if( match_option == 4 ) seg_match_A( )
+    if( match_option == 5 ) seg_match_121F( )
+    if( match_option == 5.2 ) seg_match_121F2( )
+    if( match_option == 6 ) seg_match_121e( )
+    if( match_option == 7 ) seg_match_121eM( )
+    if( match_option == 8 ) seg_match_121em( )	// fails. spike order is not always preserved
+
+    if( idebug ){
+      for im1=0, match1_list.size-1 {
+	printf( "seg_match: %3d tr1 %10g tr2 %10g\n", \
+	  im1, tr1.vec_t.x[ match1_list.x[im1] ], tr2.vec_t.x[ match2_list.x[im1] ] )
+	Gmatch.mark( tr1.vec_t.x[ match1_list.x[im1] ], 0, "o", 10, im1%8+1, 1 )
+	Gmatch.mark( tr2.vec_t.x[ match2_list.x[im1] ], 0, "t", 10, im1%8+1, 1 )
+      }
+      Gmatch.exec_menu( "View = plot" )
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  proc seg_match_A(){ local i, nsz, del_diff, im_stim, iM_stim, jm_stim, jM_stim localobj rV
+    match1_list = new Vector()
+    match2_list = new Vector()
+    del_diff = (tr1.stim_del - tr2.stim_del)/dt_sample  // pending dealing with del_diff != 0
+    
+    im_stim = tr1.seg_list.indwhere( "==", tr1.stim_del/dt_sample )
+    iM_stim = tr1.seg_list.indwhere( "==", (tr1.stim_del+tr1.stim_dur)/dt_sample )
+    
+    jm_stim = tr2.seg_list.indwhere( "==", tr2.stim_del/dt_sample )
+    jM_stim = tr2.seg_list.indwhere( "==", (tr2.stim_del+tr2.stim_dur)/dt_sample )
+    
+    if( idebug ) printf( "seg_match_A: del_diff %g stim im %g iM %g jm %g jM %g\n", \
+      del_diff, im_stim, iM_stim, jm_stim, jM_stim )
+
+
+    //correct of del_diff only if del and del+dur are set
+    if( int(seg_option/100)%10 && int(seg_option/10)%10 && im_stim>=0 && iM_stim>=0 && jm_stim>=0 && jM_stim>=0 ){
+
+      rV = match_r( 0, im_stim, 0, jm_stim, 0 )
+      rV.append( match_r( im_stim+1, iM_stim-1, jm_stim+1, jM_stim-1, del_diff ) )
+      rV.append( match_r( iM_stim, tr1.seg_list.size-1, jM_stim, tr2.seg_list.size-1, 0 ) )
+
+    }else{
+      rV = match_r( 0, tr1.seg_list.size-1, 0, tr2.seg_list.size-1, 0 )
+    }
+
+    for i=0, rV.size-1 {
+      match1_list.append( tr1.seg_list.x[ int( rV.x[i]/1000 )] )
+      match2_list.append( tr2.seg_list.x[ rV.x[i]%1000 ] )
+    }
+    
+  }
+  
+  // return vector with best matches for tr1.seg_list.x[im,iM] and tr2.seg_list.x[jm,jM]
+  obfunc match_r(){ local im, iM, i, jm, jM, del_diff, j, vmin, imin, jmin localobj rL, v1, v2
+    im = $1
+    iM = $2
+    jm = $3
+    jM = $4
+    del_diff = $5
+
+    rL = new Vector()
+
+    if( iM-im >= 0 && jM-jm >=0 ){
+
+      vmin = 1e60
+      for i=im, iM {
+	for j=jm, jM {
+	  if( abs( tr1.seg_list.x[i] - tr2.seg_list.x[j] - del_diff ) < vmin ){
+	    vmin = abs( tr1.seg_list.x[i] - tr2.seg_list.x[j] - del_diff )
+	    imin = i
+	    jmin = j
+	  }
+	}
+      }
+      v1 = match_r( im, imin-1, jm, jmin-1, del_diff )
+      v2 = match_r( imin+1, iM, jmin+1, jM, del_diff )
+      v1.append( imin*1000 + jmin )
+      rL.append( v1, v2 )
+    }
+    return rL
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Can fail with seg_option=1001
+  // Kept because used in submitted paper
+  proc seg_match_121(){ local i, im, iM, sz1, sz2
+
+    sz1 = tr1.seg_list.size-1
+    sz2 = tr2.seg_list.size-1
+    
+    im = sz1
+    if( im > sz2 ) im = sz2
+    if( idebug ) printf( "seg_match_121 im %g\n", im )
+    
+    match1_list = tr1.seg_list.c(0,im)
+    match2_list = tr2.seg_list.c(0,im)
+    
+    if( sz1 <= sz2 ){
+      match2_list.x[im] = match1_list.x[sz1]
+      match2_list.x[im-1] = match1_list.x[sz1-1]
+    }else{
+      match1_list.x[im] = match2_list.x[sz2]
+      match1_list.x[im-1] = match2_list.x[sz2-1]
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  public max
+  func max(){ local i, im
+    im = $1
+    for i=1, numarg() if( $i>im ) im = $i
+    return im
+  }
+
+  public min
+  func min(){ local i, im
+    im = $1
+    for i=1, numarg() if( $i<im ) im = $i
+    return im
+  }
+
+  //--------------------------------------------------------------------------------
+  // Fix seg_match_121 using latest spike for next to last align
+  proc seg_match_121eM(){ local i, sz1, sz2, msz
+    
+    sz1 = tr1.seg_list.size-1
+    sz2 = tr2.seg_list.size-1
+    msz = min( sz1, sz2 )
+
+    match1_list = tr1.seg_list.c(0,msz)
+    match2_list = tr2.seg_list.c(0,msz)
+    
+    if( sz1 <= sz2 ){
+      match2_list.x[msz] = match1_list.x[sz1]
+    }else{
+      match1_list.x[msz] = match2_list.x[sz2]
+    }
+    match2_list.x[msz-1] = match1_list.x[msz-1] = max( match2_list.x[msz-1], match1_list.x[msz-1] )
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Fix seg_match_121 using latest spike for next to last align
+  // fails. spike order is not always preserved
+  proc seg_match_121em(){ local i, sz1, sz2, msz
+    
+    sz1 = tr1.seg_list.size-1
+    sz2 = tr2.seg_list.size-1
+    msz = min( sz1, sz2 )
+
+    match1_list = tr1.seg_list.c(0,msz)
+    match2_list = tr2.seg_list.c(0,msz)
+    
+    if( sz1 <= sz2 ){
+      match2_list.x[msz] = match1_list.x[sz1]
+    }else{
+      match1_list.x[msz] = match2_list.x[sz2]
+    }
+    match2_list.x[msz-1] = match1_list.x[msz-1] = min( match2_list.x[msz-1], match1_list.x[msz-1] )
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Fix seg_match_121 using latest spike for next to last align
+  proc seg_match_121e(){ local i, im, sz1, sz2
+
+    sz1 = tr1.seg_list.size-1
+    sz2 = tr2.seg_list.size-1
+    
+    if( sz1 >= sz2 ) im = sz2	// im = min( sz1, sz2 )
+    if( sz1 <  sz2 ) im = sz1
+    if( idebug ) printf( "seg_match_121e im %g\n", im )
+    
+    match1_list = tr1.seg_list.c(0,im)
+    match2_list = tr2.seg_list.c(0,im)
+    
+    if( sz1 <= sz2 ){
+      match2_list.x[im] = match1_list.x[sz1]
+    }else{
+      match1_list.x[im] = match2_list.x[sz2]
+    }
+    if( match2_list.x[im-1] >= match1_list.x[im-1] ) { match1_list.x[im-1] = match2_list.x[im-1] 
+    }else{ match2_list.x[im-1] = match1_list.x[im-1] }
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Fixed version of seg_match_121 above
+  proc seg_match_121F(){ local i, im, iM, sz1, sz2
+
+    sz1 = tr1.seg_list.size-1
+    sz2 = tr2.seg_list.size-1
+    
+    im = min( sz1, sz2 )
+    if( idebug ) printf( "seg_match_121F im %g\n", im )
+    
+    match1_list = tr1.seg_list.c(0,im)
+    match2_list = tr2.seg_list.c(0,im)
+    
+    if( sz1 <= sz2 ){
+      if( int(seg_option%10) )    match2_list.x[im] = match1_list.x[sz1]
+      if( int(seg_option/10%10) ) match2_list.x[im-1] = match1_list.x[sz1-1]
+    }else{
+      if( int(seg_option%10) )    match1_list.x[im] = match2_list.x[sz2]
+      if( int(seg_option/10%10) ) match1_list.x[im-1] = match2_list.x[sz2-1]
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  // seg_match_121F doesn't check that stim end is within trace. Fix that
+  // 30Nov07. Added check for match1_list.x[sz1-1]>=match2_list.x[im-1] to avoid twisting time points
+  proc seg_match_121F2(){ local i, im, iM, sz1, sz2, stim_end
+
+    sz1 = tr1.seg_list.size-1
+    sz2 = tr2.seg_list.size-1
+    stim_end = tr1.stim_del + tr1.stim_dur
+    
+    im = min( sz1, sz2 )
+    if( idebug ) printf( "seg_match_121F2 im %g\n", im )
+    
+    match1_list = tr1.seg_list.c(0,im)
+    match2_list = tr2.seg_list.c(0,im)
+    
+    if( sz1 <= sz2 ){
+      if( int(seg_option%10) )    match2_list.x[im] = match1_list.x[sz1]
+      // tmax is set in check_tr12()
+      if( int(seg_option/10%10) && stim_end<tmax && match1_list.x[sz1-1]>=match2_list.x[im-1] ) \
+      match2_list.x[im-1] = match1_list.x[sz1-1]
+    }else{
+      if( int(seg_option%10) )    match1_list.x[im] = match2_list.x[sz2]
+      if( int(seg_option/10%10) && stim_end<tmax && match2_list.x[sz2-1]>=match1_list.x[im-1] ) \
+      match1_list.x[im-1] = match2_list.x[sz2-1]
+    }
+  }
+
+  //--------------------------------------------------------------------------------
+  // I suspect it can fail
+  proc seg_match_T(){ local iM1, iM2, im1, im2, zi1, zi2, ieos, del_diff
+    imatch_dt = match_dt / dt_sample
+    
+    match1_list = new Vector()
+    match2_list = new Vector()
+
+    iM1 = iM2	= 1
+    im1 = im2	= 0
+    iMa = 1
+    match1_list.append( tr1.seg_list.x[im1] )
+    match2_list.append( tr2.seg_list.x[im2] )
+    
+    ieos = 0
+    // force end of stimulus pulse EOS match
+    if( int(seg_option/10) && \
+    tr1.seg_list.x[tr1.seg_list.size-2]==int(0.5+(tr1.stim_del+tr1.stim_dur)/dt_sample) && \
+    tr2.seg_list.x[tr2.seg_list.size-2]==int(0.5+(tr2.stim_del+tr2.stim_dur)/dt_sample) ) ieos=1
+    
+    del_diff = (tr1.stim_del - tr2.stim_del)/dt_sample	// account for different stim_del
+
+    // advance iM1 & iM2 in step until they are within match_dt
+    // while( iM1 < tr1.seg_list.size() && iM2 < tr2.seg_list.size() ){
+    while( iM1 < tr1.seg_list.size()-1 -ieos && iM2 < tr2.seg_list.size()-1 -ieos ){ // last points mached at end
+      zi1 = tr1.seg_list.x[iM1]
+      zi2 = tr2.seg_list.x[iM2]
+      if( abs( zi1 - zi2 + del_diff ) <= imatch_dt ){
+	
+	if( idebug ) printf( "Matched im-iM zi %3g-%3g %6g %3g-%3g %6g imatch_dt %3g\n", \
+            im1, iM1, zi1, im2, iM2, zi2, imatch_dt )
+
+	match1_list.append( tr1.seg_list.x[iM1] )
+	match2_list.append( tr2.seg_list.x[iM2] )
+	
+	im1 = iM1
+	iM1 += 1
+	im2 = iM2
+	iM2 += 1
+      }else{
+	if( (zi1+del_diff) < zi2 ) { 
+	  if( idebug ) Gmatch.mark( tr1.vec_t.x[ tr1.seg_list.x[iM1] ], 0, "O", 10, 2, 1 )
+	  iM1 += 1 
+	}else{ 
+	  if( idebug ) Gmatch.mark( tr2.vec_t.x[ tr2.seg_list.x[iM2] ], 0, "T", 10, 2, 1 )
+	  iM2 += 1
+ 	}
+	if( idebug ) printf( "++Advance im-iM zi %3g-%3g %6g %3g-%3g %6g imatch_dt %3g\n", \
+        im1, iM1, zi1, im2, iM2, zi2, imatch_dt )
+      }
+    }
+    if( ieos ){
+      match1_list.append( tr1.seg_list.x[tr1.seg_list.size-2] )
+      match2_list.append( tr2.seg_list.x[tr2.seg_list.size-2] )
+    }
+    match1_list.append( tr1.seg_list.x[tr1.seg_list.size-1] ) // match last points
+    match2_list.append( tr2.seg_list.x[tr2.seg_list.size-1] )
+  }
+  
+  //--------------------------------------------------------------------------------
+  // 
+  proc seg_match_D(){ local iM1, iM2, im1, im2, zi1, zi2 
+    imatch_dt = match_dt / dt_sample
+    
+    match1_list = new Vector()
+    match2_list = new Vector()
+
+    iM1 = iM2	= 1
+    im1 = im2	= 0
+    iMa = 1
+    match1_list.append( tr1.seg_list.x[im1] )
+    match2_list.append( tr2.seg_list.x[im2] )
+
+    // advance iM1 & iM2 in step
+    while( iM1 < tr1.seg_list.size() && iM2 < tr2.seg_list.size() ){
+      zi1 = tr1.seg_list.x[iM1]
+      zi2 = tr2.seg_list.x[iM2]
+
+      d1 = tr1.seg_list.x[iM1] - tr1.seg_list.x[im1]
+      d2 = tr2.seg_list.x[iM2] - tr2.seg_list.x[im2]
+      
+      if( d1 < d2 ){
+	while( iM1+1 < tr1.seg_list.size() ){
+	  if( abs( d2-d1) > abs(d2 - (tr1.seg_list.x[iM1+1] - tr1.seg_list.x[im1]))){
+	    iM1 += 1
+	  }else{ break }
+	}
+      }else{
+	while( iM2+1 < tr2.seg_list.size() ){
+	  if( abs( d2-d1) > abs(d1 - (tr2.seg_list.x[iM2+1] - tr2.seg_list.x[im2]))){
+	    iM2 += 1
+	  }else{ break }
+	}
+      }
+      match1_list.append( tr1.seg_list.x[iM1] )
+      match2_list.append( tr2.seg_list.x[iM2] )
+      
+      im1 = iM1
+      iM1 += 1
+      im2 = iM2
+      iM2 += 1
+    }
+
+  }
+  
+  // --------------------------------------------------------------------------------
+  // Similar to seg_match_T but attempting to find a better match after a within match_dt match
+  // Initial tests show its not symmetric. This must be a bug?
+  public seg_match_Tadv
+  proc seg_match_Tadv(){ local iM1, iM2, im1, im2, zi1, zi2 
+    imatch_dt = match_dt / dt_sample
+    
+    match1_list = new Vector()
+    match2_list = new Vector()
+
+    iM1 = iM2	= 1
+    im1 = im2	= 0
+    iMa = 1
+    match1_list.append( tr1.seg_list.x[im1] )
+    match2_list.append( tr2.seg_list.x[im2] )
+
+    // advance iM1 & iM2 in step until they are within match_dt
+    while( iM1 < tr1.seg_list.size() && iM2 < tr2.seg_list.size() ){
+      zi1 = tr1.seg_list.x[iM1]
+      zi2 = tr2.seg_list.x[iM2]
+      if( idebug>100 ) printf( "imatch_dt %3g im1 %3g iM1 %3g im2 %3g iM2 %3g zi1 %3g zi2 %3g\n", \
+          imatch_dt, im1, iM1, im2, iM2, zi1, zi2 )
+      if( abs( zi1 - zi2 ) > imatch_dt ){
+	if( zi1 < zi2 ) { 
+	  iM1 += 1 
+	  iMa = 1
+	}else{ 
+	  iM2 += 1
+	  iMa = 0
+ 	}
+	continue
+      }
+      //- Look ahead for better match
+      if( idebug>100 ) printf( "imatch_dt look-ahead %3g iM1 %3g im1 %3g iM2 %3g im2 %3g zi1 %3g zi2 %3g\n", \
+          imatch_dt, iM1, im1, iM2, im2, zi1, zi2 )
+
+      if( iMa==1 ){
+	while( iM1+1 < tr1.seg_list.size() ){
+	  if( abs(zi1-zi2) > abs( zi2 - tr1.seg_list.x[iM1+1] ) ) { iM1+=1 
+	  }else{ break }
+	}
+      }else{
+	while( iM2+1 < tr2.seg_list.size() ){
+	  if( abs(zi1-zi2) > abs( zi1 - tr2.seg_list.x[iM2+1] ) ) { iM2+=1 
+	  }else{ break }
+	}
+      }
+      if( idebug>100 ) printf( "imatch_dt found %3g iM1 %3g im1 %3g iM2 %3g im2 %3g zi1 %3g zi2 %3g\n", \
+          imatch_dt, iM1, im1, iM2, im2, zi1, zi2 )
+
+      match1_list.append( tr1.seg_list.x[iM1] )
+      match2_list.append( tr2.seg_list.x[iM2] )
+
+      im1 = iM1
+      iM1 += 1
+      im2 = iM2
+      iM2 += 1
+    }
+    if( idebug ){
+      for im1=0, match1_list.size-1 {
+	printf( "seg_match: %3d tr1 %10g tr2 %10g\n", \
+	  im1, tr1.vec_t.x[ match1_list.x[im1] ], tr2.vec_t.x[ match2_list.x[im1] ] )
+	Gmatch.mark( tr1.vec_t.x[ match1_list.x[im1] ], 0, "o", 10, 1, 1 )	// circle
+	Gmatch.mark( tr2.vec_t.x[ match2_list.x[im1] ], 0, "t", 10, 2, 1 )	// 
+      }
+      Gmatch.exec_menu( "View = plot" )
+    }
+  }
+    
+  //--------------------------------------------------------------------------------
+  proc seg_err(){ local imlist, i, b1i, b1f, b1sz, b2i, b2f, b2sz, intvl_avg, m1, m2, t0 localobj tV, sV1, sV2, sV_err, sV_sqerr
+    imlist = $1
+    if( match1_list.size-1 < imlist+1 || match2_list.size-1 < imlist+1 ) abort( "seg_err: bounds violation\n" )
+    b1i		= match1_list.x[imlist]
+    b1f		= match1_list.x[imlist+1]
+    b1sz  	= b1f - b1i
+    b2i		= match2_list.x[imlist]
+    b2f		= match2_list.x[imlist+1]
+    b2sz  	= b2f - b2i
+    
+    intvl_avg	= int( 0.5 + (b1sz + b2sz) / 2 )
+    //    m1		= ( b1f - b1i ) / intvl_avg
+    //    m2		= ( b2f - b2i ) / intvl_avg 
+    m1		= b1sz / intvl_avg
+    m2		= b2sz / intvl_avg 
+    
+    err_dt = sqerr_dt = errp_dt = 0
+    for i=0, intvl_avg-1 {
+      diff_dt = tr1.vec_v.x[ int(0.5 + i*m1 + b1i) ] - tr2.vec_v.x[ int(0.5 + i*m2 + b2i) ]
+      err_dt += abs( diff_dt )
+      sqerr_dt += diff_dt^2
+      errp_dt += abs( diff_dt )^D_p
+    }
+
+    $&2 = dt_sample * b1sz	// return b1sz, b2sz, err, sqerr
+    $&3 = dt_sample * b2sz
+    $&4 = dt_sample * err_dt
+    //    $&5 = dt_sample * dt_sample * sqerr_dt
+    $&5 = dt_sample * sqerr_dt
+    $&6 = dt_sample * errp_dt
+    $&7 = dt_sample * intvl_avg * abs( xy_ratio( m1, m2 )-1 )
+
+    if( idebug ) {
+      tV = new Vector( intvl_avg )
+      sV1 = new Vector( intvl_avg )
+      sV2 = new Vector( intvl_avg )
+      sV_err = new Vector( intvl_avg )
+      sV_sqerr = new Vector( intvl_avg )
+
+      t0 = tr1.vec_t.x[ int(0.5+(b1i+b2i)/2) ]
+      for i=0, intvl_avg-1 {
+	tV.x[i] = t0 + i * dt_sample
+	sV1.x[i] = tr1.vec_v.x[ int(0.5 + i*m1 + b1i) ]
+	sV2.x[i] = tr2.vec_v.x[ int(0.5 + i*m2 + b2i) ]
+	diff_dt = sV1.x[i] - sV2.x[i] 
+	sV_err.x[i] = abs( diff_dt )
+	sV_sqerr.x[i] = diff_dt^2
+      }
+      sV1.line( Gsegs, tV, 2, 1 )
+      sV2.line( Gsegs, tV, 1, 1 )
+      sV_err.line( Gsegs, tV, 3, 1 )
+      if( idebug > 1 ) sV_sqerr.line( Gsegs, tV, 4, 1 )
+      Gsegs.exec_menu( "View = plot" )
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  func xy_ratio(){ local x, y
+    x = $1
+    y = $2
+    if( x >= y ) return x/y
+    if( y > x  ) return y/x
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Check that tr1 & tr2 can be eMatched 
+  //  (set dt_sample to max of their dt_sample and set imin & imax based on tmin & tmax )
+
+  proc check_tr12(){
+    if( idebug ){
+      if( object_id( Gmatch )== 0 ) Gmatch = new Graph()
+      Gmatch.erase_all()
+      Gmatch.family( 1 )
+      Gmatch.color( 2 )
+      tr1.vec_v.line( Gmatch, tr1.vec_t )
+      Gmatch.label( tr1.name )
+      Gmatch.color( 1 )
+      tr2.vec_v.line( Gmatch, tr2.vec_t )
+      Gmatch.label( tr2.name )
+      Gmatch.exec_menu( "View = plot" )
+
+      if( object_id( Gsegs )== 0 ) Gsegs = new Graph()
+      Gsegs.erase_all()
+      Gsegs.family( 1 )
+
+      if( object_id( GdV )== 0 ) GdV = new Graph()
+      GdV.erase_all()
+      GdV.family( 1 )
+    }
+    unify_dt_sample( tr1, tr2 )
+    dt_sample = tr1.dt_sample
+
+    if( tmin == -1 ) tmin = tr1.vec_t.x[0]
+    if( tmax == -1 ) tmax = tr1.vec_t.x[ tr1.vec_t.size-1]
+    
+    if( tmin < tr1.vec_t.x[0] || tmin < tr2.vec_t.x[0] ) \
+        abort( "eTrace:check_tr12: tmin problem\n" )
+    if( tmax > tr1.vec_t.x[tr1.vec_t.size-1] || tmax > tr2.vec_t.x[tr2.vec_t.size-1] ) \
+        abort( "eTrace:check_tr12: tmax problem\n" )
+	
+    imin = int( 0.5 + tmin / dt_sample )
+    imax = int( 0.5 + tmax / dt_sample )
+    if( imin < 0 || imax > tr1.vec_v.size || imax > tr2.vec_v.size ) abort( "check_tr12: imin or imax problem\n")
+  }
+
+  //--------------------------------------------------------------------------------
+  public M, shape_err, shape_sqerr, shape_errp, intvl_err, intvl_sqerr
+  //- M( tr1, tr2 ) Measure distance between eTrace tr1 and tr2
+  proc M(){ 
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+
+    seg_match()
+    eval_match()
+  }
+  //--------------------------------------------------------------------------------  
+  public Dis_err
+  proc eval_match(){ local il, b1sz, b2sz, err, sqerr, errp, errmp
+    shape_err = shape_sqerr = Dfp_err = Dfpm_err = intvl_err = intvl_sqerr = Dis_err = 0
+
+    for il=0, match1_list.size-2 {
+      // if( int(seg_option/10000)==0 && \
+      // match2_list.x[il+1]==int(0.5 + (tr2.stim_del+tr2.stim_dur)/dt_sample) && \
+      // match1_list.x[il+1]==int(0.5 + (tr1.stim_del+tr1.stim_dur)/dt_sample)) continue
+
+      seg_err( il, &b1sz, &b2sz, &err, &sqerr, &errp, &errmp )
+
+      shape_err		+= err
+      shape_sqerr 	+= sqerr
+      intvl_err 	+= abs( b1sz - b2sz )
+      intvl_sqerr 	+= (b1sz - b2sz)^2
+      Dis_err	 	+= abs(b1sz - b2sz)^(D_p)
+      Dfp_err 		+= errp
+      //      Dfpm_err 		+= errp + (D_pm * errmp)^D_p
+      Dfpm_err 		+= errp + (D_pm * errmp)^D_p
+
+      if( idebug ) printf( "%3d t %7.2f %7.2f sz1 %6g sz2 %6g shape %6.1f %6.1f intvl %6.1f %6.1f\n", \
+      il, tr1.vec_t.x[match1_list.x[il]], tr2.vec_t.x[match2_list.x[il]], \
+      b1sz, b2sz, err, sqerr, abs(b1sz-b2sz), (b1sz-b2sz)^2 )
+    }
+    if( idebug ) printf( "shape_err %9g shape_sqerr %9g\nintvl_err %9g intvl_sqerr %9g\nm1 %9g m1s %9g\n", \
+    shape_err, shape_sqerr, intvl_err, intvl_sqerr, \
+    alpha*shape_err+beta*intvl_err, alpha*shape_sqerr+beta*intvl_sqerr )
+  }
+  
+  //--------------------------------------------------------------------------------
+  public m0
+  func m0(){ local i, sum, res
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    sum = 0
+    for i=imin, imax sum += abs( tr1.vec_v.x[i] - tr2.vec_v.x[i] )
+    res = sum*dt_sample
+
+    return res
+  }
+
+  public m0s
+  func m0s(){ local i, sumsq, res
+    tr1 = $o1
+    tr2 = $o2
+    check_tr12()
+    sumsq = 0
+    for i=imin, imax sumsq += ( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^2
+    res = sumsq*dt_sample
+
+    return sqrt( res )
+  }
+
+  public m0sW		// Wrong. Needs sqrt to satsfy triangle ineq
+  func m0sW(){ local i, sumsq, res
+    tr1 = $o1
+    tr2 = $o2
+    check_tr12()
+    sumsq = 0
+    for i=imin, imax sumsq += ( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^2
+    res = sumsq*dt_sample
+
+    return res
+  }
+
+  public m1
+  func m1(){ local res
+    M( $o1, $o2 )
+    res = alpha* shape_err + beta *intvl_err
+    
+    return res
+  }
+  //================================================================================
+  public Dw
+  func Dw(){ local i, sum, res
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    sum = 0
+    for i=imin, imax sum += abs( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^D_p
+    return 1/(tmax-tmin) * (sum*dt_sample)^(1/D_p)
+  }
+  //================================================================================
+  public DwErr
+  func DwErr(){ local i, sum, res
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    sum = 0
+    for i=imin, imax sum += abs( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^D_p
+    //    return 1/(tmax-tmin) * (sum)^(1/D_p)
+    return sum /(tmax-tmin) 
+  }
+  //--------------------------------------------------------------------------------
+  public Dfp
+  func Dfp(){ local res
+    M( $o1, $o2 )
+    return 1/(tmax-tmin) * Dfp_err^(1/D_p)
+  }
+  
+  //--------------------------------------------------------------------------------
+  public xtra_segs // return number of xtra segs added by seg_look due to seg_option setting
+  func xtra_segs(){ local i, xtra, stim_end
+    stim_end = tr1.stim_del + tr1.stim_dur
+    xtra = 0
+    for i=0,3 if( int(seg_option/10^i%10 )) xtra += 1    
+    if( int(seg_option/10%10) && stim_end >= tmax ) xtra -= 1 
+    return xtra
+  }
+
+  //--------------------------------------------------------------------------------
+  public DfpwPk, Dfp_err, Dw_err, pkPs, pkPsA
+  // Dfp + Dw*alpha + Pk_penalty. 
+  // pkPs controls reduction of penalty of later spikes (small(0.1)=>little reduct, large(10)=>large reduction)
+  func DfpwPk(){ local i, sum, xtra_seg, spks1, spks2
+    M( $o1, $o2 )
+    xtra_seg = xtra_segs()
+    { spks1 = tr1.seg_list.size-xtra_seg spks2 = tr2.seg_list.size-xtra_seg }
+    if( idebug ) printf( "DfpwPk: xtra_seg %g spks1 %g spks2 %g\n", xtra_seg, spks1, spks2 )
+
+    Dfp_err = Dfp_err^(1/D_p)
+    sum = 0
+    for i=imin, imax sum += abs( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^D_p
+    Dw_err = (sum*dt_sample)^(1/D_p)
+    penalty_err = pkP*abs( spks1 - spks2 ) * 1/exp(pkPs*(min( spks1, spks2 )))
+    res = Dfp_err + alpha*Dw_err + beta*Dis_err + penalty_err
+    return res
+  }
+  
+  //================================================================================
+  public DfpwPkdV
+  func DfpwPkdV(){ local i, sum, xtra_seg, spks1, spks2, Dfp_err, Dfp_dV_err, Dw_err, res
+    tr1 = $o1
+    tr2 = $o2
+    check_tr12()
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    seg_match()
+    
+    xtra_seg = xtra_segs()
+    { spks1 = tr1.seg_list.size-xtra_seg spks2 = tr2.seg_list.size-xtra_seg }
+    if( idebug ) printf( "DfpwPkdV: xtra_seg %g spks1 %g spks2 %g\n", xtra_seg, spks1, spks2 )
+    penalty_err = pkP*abs( spks1 - spks2 ) * 1/exp(pkPs*(min( spks1, spks2 )))
+    
+    do_fpmatch_tr12M()
+    Dis_err = (Dis_err * tr1.dt_sample)^(1/D_p)
+
+    Dfp_err = 0
+    for i=imin, imax Dfp_err += abs( tr1M.vec_v.x[i] - tr2M.vec_v.x[i] )^D_p
+    Dfp_err = (Dfp_err*dt_sample)^(1/D_p)
+    
+    Dw_err = 0
+    if( alpha > 0 ){
+      for i=imin, imax Dw_err += abs( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^D_p
+      Dw_err = (Dw_err*dt_sample)^(1/D_p)
+    }
+    
+    Dfp_dV_err = 0
+    if( gamma > 0 ){
+      tr1M.vec_dv.deriv( tr1M.vec_v, tr1.dt_sample, 2 )
+      tr2M.vec_dv.deriv( tr2M.vec_v, tr2.dt_sample, 2 )
+      for i=0, tr1M.vec_dv.size-1 Dfp_dV_err += abs( tr1M.vec_dv.x[i] - tr2M.vec_dv.x[i] )^D_p
+      Dfp_dV_err = (Dfp_dV_err * tr1.dt_sample)^(1/D_p)
+      if( idebug ){
+	tr1M.vec_dv.line( GdV, tr1M.vec_t, 2, 1 )
+	tr2M.vec_dv.line( GdV, tr2M.vec_t, 1, 1 )
+      }
+    }
+    if( idebug ) GdV.exec_menu( "View = plot" )
+
+    res = Dfp_err + alpha*Dw_err + beta*Dis_err + gamma*Dfp_dV_err + penalty_err
+    
+    if( ilog ) 		  printf( " Dfp_err %g", Dfp_err )
+    if( ilog && alpha>0 ) printf( " alpha*Dw_err %g", alpha*Dw_err )
+    if( ilog && beta >0 ) printf( " beta*Dis_err %g", beta*Dis_err )
+    if( ilog && gamma >0 ) printf( " gamma*Dfp_dV_err %g", gamma*Dfp_dV_err )
+    if( ilog            ) printf( " penalty_err %g", penalty_err )
+
+    return res
+  }
+  
+  //================================================================================
+  public ratioM, ratioA
+  func ratioA(){
+    if( $1 > $2 ) return 1 - $2/$1
+    return 1 - $1/$2
+  }
+  
+  func ratioM(){
+    return ( 2* abs($1-$2)/($1+$2) )
+  }
+  
+  //================================================================================
+  // return fpA*fpErr 
+  public DfpwPkdVa
+  func DfpwPkdVa(){ local i, j, i_spk_pk, i1, i2, sum, xtra_seg, spks1, spks2, res, fpErr, rM, errj, Ri_err, DfpRi_err localobj ddv1, ddv2, dv1, dv2
+    tr1 = $o1
+    tr2 = $o2
+    check_tr12() 	// sets imin & imax based on tmin & tmax values
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    seg_match()
+    
+    penalty_err = abs( tr1.seg_nspikes - tr2.seg_nspikes ) * \
+      1/exp(pkPs*(min( tr1.seg_nspikes, tr2.seg_nspikes )))
+    if( idebug ) printf( "DfpwPkdVa: spks1 %g spks2 %g\n", tr1.seg_nspikes, tr2.seg_nspikes )
+    
+    do_fpmatch_tr12M() //
+    Dis_err = (Dis_err * tr1.dt_sample)^(1/D_p)
+
+    Dfp_err = DfpRi_err = Ri_err = 0
+    for j=0, tr12M_iavg.size-2 {
+      errj = 0
+      for i=tr12M_iavg.x[j], tr12M_iavg.x[j+1]-1 {
+	errj += abs( tr1M.vec_v.x[i] - tr2M.vec_v.x[i] )^D_p
+      }
+      Dfp_err += errj
+      rM = ratioM( tr12M_isz1.x[j], tr12M_isz2.x[j] )
+      if( mF1 > 0 ) DfpRi_err += errj*rM
+      if( mF2 > 0 ) Ri_err += rM
+      if( idebug ) printf( ">>DfpwPkdVa: tr12M_iavg %10g %10g rM %10g errj %10g Ri_err %10g<<\n", \
+        tr12M_iavg.x[j], tr12M_iavg.x[j+1]-1, rM, errj*dt_sample, Ri_err )
+	// if( idebug ) {
+	// rA = ratioA(tr12M_isz1.x[j],tr12M_isz2.x[j] )
+	// if( rA>0 ) printf( "rM %g rA %g rM/rA %g\n", rM, rA, rM/rA )
+	//      }
+    }
+    Dfp_err = (Dfp_err*dt_sample)^(1/D_p)
+    DfpRi_err *= dt_sample * 100
+
+    Dw_err = 0
+    if( alpha > 0 ){
+      for i=imin, imax Dw_err += abs( tr1.vec_v.x[i] - tr2.vec_v.x[i] )^D_p
+      Dw_err = (Dw_err*dt_sample)^(1/D_p)
+    }
+    
+    Dfp_dV_err = 0
+    if( gamma > 0 ){
+      { dv1 = new Vector() dv2 = new Vector() }
+      dv1.deriv( tr1M.vec_v, tr1.dt_sample, 2 )
+      dv2.deriv( tr2M.vec_v, tr2.dt_sample, 2 )
+      if( gamma_1<0 ) for i=0, dv1.size-1 Dfp_dV_err += abs( dv1.x[i] - dv2.x[i] )^D_p
+      if( gamma_1>=0 ) {	// focus around the peak to avoid noise from other regions
+	if( idebug ) printf( "Gamma match1,2 %d %d\n", match1_list.x[2], match2_list.x[2] )
+	i_spk_pk = int( (match1_list.x[2]+ match2_list.x[2] )/2 + 0.5 )
+	i1 = max( 0, i_spk_pk - int(gamma_1/tr1.dt_sample+0.5) )
+	i2 = min( dv1.size-1, i_spk_pk + int(gamma_2/tr1.dt_sample +0.5) )
+	if( idebug ) printf( "Gamma i_spk_pk %d i1,2 %d %d\n", i_spk_pk, i1, i2 )
+	for i=i1, i2 Dfp_dV_err += abs( dv1.x[i] - dv2.x[i] )^D_p
+      }
+      Dfp_dV_err = (Dfp_dV_err * tr1.dt_sample)^(1/D_p)
+      if( idebug ){
+	dv1.line( GdV, tr1M.vec_t, 2, 1 )
+	dv2.line( GdV, tr2M.vec_t, 1, 1 )
+      }
+    }
+
+    Dfp_ddV_err = 0
+    if( delta > 0 ){
+      { ddv1 = new Vector() ddv2 = new Vector() }
+      if( gamma <= 0 ) { 
+	dv1 = new Vector() dv2 = new Vector() 
+	dv1.deriv( tr1M.vec_v, tr1.dt_sample, 2 )
+	dv2.deriv( tr2M.vec_v, tr2.dt_sample, 2 )
+      }
+      ddv1.deriv( dv1, tr1.dt_sample, 2 )
+      ddv2.deriv( dv2, tr1.dt_sample, 2 )
+      if( delta_1<0 ) for i=0, ddv1.size-1 Dfp_ddV_err += abs( ddv1.x[i] - ddv2.x[i] )^D_p
+      if( delta_1>=0 ) {	// focus around the peak to avoid noise from other regions
+	if( idebug ) printf( "Delta match1,2 %d %d\n", match1_list.x[2], match2_list.x[2] )
+	i_spk_pk = int( (match1_list.x[2]+ match2_list.x[2] )/2 + 0.5 )
+	i1 = max( 0, i_spk_pk - int(delta_1/tr1.dt_sample+0.5) )
+	i2 = min( tr1M.vec_dv.size-1, i_spk_pk + int(delta_2/tr1.dt_sample +0.5) )
+	if( idebug ) printf( "Delta i_spk_pk %d i1,2 %d %d\n", i_spk_pk, i1, i2 )
+	for i=i1, i2 Dfp_ddV_err += abs( ddv1.x[i] - ddv2.x[i] )^D_p
+      }
+      Dfp_ddV_err = (Dfp_ddV_err * dt_sample)^(1/D_p)
+      if( idebug ){
+	ddv1.c.mul(0.1).line( GdV, tr1M.vec_t, 2, 1 )
+	ddv2.c.mul(0.1).line( GdV, tr2M.vec_t, 1, 1 )
+      }
+    }
+    
+    Dfp_dVt_err = 0
+    if( theta > 0 ){
+      if( idebug ) printf( "Theta match1,2 %d %d\n", match1_list.x[2], match2_list.x[2] )
+      i_spk_pk = int( (match1_list.x[2]+ match2_list.x[2] )/2 + 0.5 )
+      i1 = max( 0, i_spk_pk - int(theta_1/tr1.dt_sample+0.5) )
+      i2 = min( tr1M.vec_dv.size-1, i_spk_pk + int(theta_2/tr1.dt_sample +0.5) )
+      if( idebug ) printf( "Theta i_spk_pk %d i1,2 %d %d\n", i_spk_pk, i1, i2 )
+      for i=i1, i2 Dfp_dVt_err += abs( tr1M.vec_dv.x[i] - tr2M.vec_dv.x[i] )^D_p
+
+      Dfp_dVt_err = (Dfp_dVt_err * tr1.dt_sample)^(1/D_p)
+      if( idebug ){
+	tr1M.vec_dv.line( GdV, tr1M.vec_t, 4, 1 )
+	tr2M.vec_dv.line( GdV, tr2M.vec_t, 3, 1 )
+      }
+    }
+    Dfp_ddVt_err = 0
+    if( iota > 0 ){
+      if( idebug ) printf( "Iota match1,2 %d %d\n", match1_list.x[2], match2_list.x[2] )
+      i_spk_pk = int( (match1_list.x[2]+ match2_list.x[2] )/2 + 0.5 )
+      i1 = max( 0, i_spk_pk - int(iota_1/tr1.dt_sample+0.5) )
+      i2 = min( tr1M.vec_dv.size-1, i_spk_pk + int(iota_2/tr1.dt_sample +0.5) )
+      if( idebug ) printf( "Iota i_spk_pk %d i1,2 %d %d\n", i_spk_pk, i1, i2 )
+      for i=i1, i2 Dfp_ddVt_err += abs( tr1M.vec_ddv.x[i] - tr2M.vec_ddv.x[i] )^D_p
+
+      Dfp_ddVt_err = (Dfp_ddVt_err * tr1.dt_sample)^(1/D_p)
+      if( idebug ){
+	tr1M.vec_ddv.c.mul(0.1).line( GdV, tr1M.vec_t, 4, 1 )
+	tr2M.vec_ddv.c.mul(0.1).line( GdV, tr2M.vec_t, 3, 1 )
+      }
+    }
+    
+    // Traces are shifted to agree on peak and then derivatives compared
+    Dfp_dVs_err = Dfp_ddVs_err = 0
+    if( phi > 0 || chi > 0 )  dVs_err( &Dfp_dVs_err, &Dfp_ddVs_err )
+
+    if( idebug ) GdV.exec_menu( "View = plot" )    
+    
+    res = 0
+    if( ilog ) printf( " DfpwPkdVa:" )
+
+    res += err_ilog( ilog,"pkP", pkP, "penalty_err", penalty_err )
+    res += err_ilog( ilog,"alpha", alpha, 	"Dw_err", Dw_err )
+    res += err_ilog( ilog,"beta", beta, 	"Dis_err", Dis_err )
+    res += err_ilog( ilog,"gamma", gamma, 	"Dfp_dV_err", Dfp_dV_err )
+    res += err_ilog( ilog,"delta", delta, 	"Dfp_ddV_err", Dfp_ddV_err )
+    res += err_ilog( ilog,"eta", eta, 		"Dfp_err", Dfp_err )
+    res += err_ilog( ilog,"theta", theta, 	"Dfp_dVt_err", Dfp_dVt_err )
+    res += err_ilog( ilog,"iota", iota, 	"Dfp_ddVt_err", Dfp_ddVt_err )
+    res += err_ilog( ilog,"phi", phi, 		"Dfp_dVs_err", Dfp_dVs_err )
+    res += err_ilog( ilog,"chi", chi, 		"Dfp_ddVs_err", Dfp_ddVs_err )
+    res += err_ilog( ilog,"mF1", mF1, 		"DfpRi_err", DfpRi_err )
+    res += err_ilog( ilog,"mF2", mF2, 		"Ri_err", Ri_err )
+    return res
+  }
+  
+  //--------------------------------------------------------------------------------
+  // print errm with ilog
+  //  res += err_ilog( ilog, "eta", eta, "Dfp_err", Dfp_err )
+  func err_ilog(){ local res, ilog localobj str
+    ilog=$1 d1=$3 err=$5
+    str = new str_obj( "", $s2, "", $s4 )
+    res = 0
+    if(d1>0 ){ 
+      res += d1 * err
+      //      if( ilog ) printf( " %s %g %s %g * %g", str.s2, d1, str.s4, err, res )
+      if( ilog ) printf( " %s*%s %g*%g=%g", str.s2, str.s4, d1, err, res )
+    }
+    return res
+  }
+
+  //--------------------------------------------------------------------------------
+  // Calculate dV error by shifting peaks to agree
+  public  dVs_err
+  proc dVs_err(){ local i, il, it1, it2, idif, rdv, rddv localobj spk_match1, spk_match2, spk1_dv, spk2_dv, spk1_ddv, spk2_ddv, tmp0, tmp1, tmp2
+    // find spike matches in matchi_list; and place in spike_matchi
+    spk_match1 = new Vector() spk_match2 = new Vector() 
+    for il=0, tr1.spike_i.size-1 {	// find spikes in match_list
+      for i=0, match1_list.size-1 {
+	if( match1_list.x[i] == tr1.spike_i.x[il] ){	// loop over matches, and append if found
+	  spk_match1.append( match1_list.x[i] )
+	  spk_match2.append( match2_list.x[i] )
+	}
+      }
+    }
+    if( idebug ) for i=0,spk_match1.size-1 printf( " dVs_err: spk_match i %d i1,2 %g %g t1,2 %.2f %.2f\n", \
+    i, spk_match1.x[i], spk_match2.x[i], tr1.vec_t.x[spk_match1.x[i]], tr2.vec_t.x[spk_match2.x[i]] )
+    
+    if( phi>0 || chi>0 ){
+      spk1_dv = new Vector() spk2_dv = new Vector()
+      spk1_dv.deriv( tr1.vec_v, tr1.dt_sample, 2 ) spk2_dv.deriv( tr2.vec_v, tr1.dt_sample, 2 )
+    }
+    if( idebug ) { GdVsh = new Graph() GdVsh.label( "dVs_err:" ) }
+    rdv = rddv = 0
+    if( phi > 0 ){
+      it1 = int( phi_1/tr1.dt_sample +0.5 ) it2 = int( phi_2/tr1.dt_sample +0.5 )
+      for il=0, spk_match1.size-1 {
+	idif = spk_match1.x[il] - spk_match2.x[il]
+	if( idebug ) printf( "dVs_err: phi match spk %d idif %d\n", il, idif )
+	if( idebug ) {tmp1=new Vector() tmp2=new Vector() tmp0=new Vector()}
+	for i=spk_match1.x[il]-it1, spk_match1.x[il]+it2 {
+	  if( i>=0 && i<spk1_dv.size && i+idif<spk2_dv.size ){
+	    rdv += abs( spk1_dv.x[i] - spk2_dv.x[i-idif] )^D_p
+	    if( idebug ){ tmp0.append(tr1.vec_t.x[i]) tmp1.append(spk1_dv.x[i]) tmp2.append(spk2_dv.x[i-idif]) }
+	  }
+	  if( idebug ) { tmp1.line(GdVsh,tmp0,1,1) tmp2.line(GdVsh,tmp0,2,1) }
+	}
+      }
+    }
+    if( chi > 0 ){
+      spk1_ddv = new Vector() spk2_ddv = new Vector()
+      spk1_ddv.deriv( spk1_dv, tr1.dt_sample, 2 ) spk2_ddv.deriv( spk2_dv, tr1.dt_sample, 2 )
+      it1 = int( chi_1/tr1.dt_sample +0.5 ) it2 = int( chi_2/tr1.dt_sample +0.5 )
+      for il=0, spk_match1.size-1 {
+	idif = spk_match1.x[il] - spk_match2.x[il]
+	if( idebug ) printf( "dVs_err: chi match spk %d idif %d\n", il, idif )
+	if( idebug ) {tmp1=new Vector() tmp2=new Vector() tmp0=new Vector()}
+	for i=spk_match1.x[il]-it1, spk_match1.x[il]+it2 {
+	  if( i>=0 && i<spk1_ddv.size && i+idif<spk2_ddv.size ){
+	    rddv += abs( spk1_ddv.x[i] - spk2_ddv.x[i-idif] )^D_p
+	    if( idebug ){ tmp0.append(tr1.vec_t.x[i]) tmp1.append(spk1_ddv.x[i]) tmp2.append(spk2_ddv.x[i-idif]) }
+	  }
+	}
+	if( idebug ) { tmp1.mul(0.1).line(GdVsh,tmp0,1,1) tmp2.mul(0.1).line(GdVsh,tmp0,2,1) }
+      }
+    }
+
+    $&1 = (rdv *tr1.dt_sample)^(1/D_p)	// return values into args; should be called ( &v1, &v2 )
+    $&2 = (rddv*tr1.dt_sample)^(1/D_p)
+  }
+
+  //--------------------------------------------------------------------------------
+  // Code related to backpropagating action potentials (bAP)
+  // Based on fig1C of Golding etal JNeurophysiol 2001.
+  // Golding 2001 has no definition of AP amplitude. Spruston etal Nature 1995 says it's measured from the 
+  // infection point. But this makes no sense; ip is in the middle of the spike, when acceleration reverses
+  // before reaching peak. I think what they mean, is the 'elbow' when the spike takes off. 
+  //
+  public First_bAPr	// 1st-AP(x)/1st-AP(soma)
+  func First_bAPr(){ local x
+    x = $1
+    return 0.452*exp(-0.0071*x)+0.567
+  }
+  public Last_bAPr	// Last-AP(x)/Last-AP(soma)
+  func Last_bAPr(){ local x
+    x = $1
+    return 1.27*exp(-(x+167)^2/(2*239^2))
+  }
+    
+  //--------------------------------------------------------------------------------
+  // simL.o(0) is trace to compare to tgt; 
+  // simL.o(i) i>0 are traces recorded elsewhere. Use them to evaluate bAP (backpropagating APs)
+  public DfpwPkdVa_bAP // ( simL, tgt )
+  func DfpwPkdVa_bAP(){ local i, idend, res, dist_um, err_bAP localobj simL, eTgt, ap_soma, ap_dend, ap_mid, str
+    simL = $o1
+    eTgt = $o2
+    //    simL.o(0).idebug = simL.o(1).idebug =1 
+    res = DfpwPkdVa( simL.o(0), eTgt )
+    
+    err_bAP = 0
+    str = new str_obj()
+    tr1 = simL.o(0)	// soma recording
+    for idend=1, simL.count-1 {
+      tr2 = simL.o(idend)	// dendritic recording
+      { sprint( str.s1, "%s %s.tmp=y3d(0.5)", tr2.name, this ) execute( str.s1 )}
+      dist_um = tmp
+      if( idebug ) printf( "den rec is %g away\n", dist_um )
+      
+      check_tr12()
+      tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+      ap_soma = tr1.ampAPe( seg_option, ampAPe_before_ms )
+      // lower seg_v_th ?
+      tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th+bAP_v_th_delta, seg_tiny_last )
+      ap_dend = tr2.ampAPe( seg_option, ampAPe_before_ms )
+      
+      if( bAP_option == 0 ) err_bAP += bAP_FML_err( dist_um, ap_soma, ap_dend )
+      if( bAP_option == 1 ) err_bAP += bAP_Exp_err( dist_um, ap_soma, ap_dend )
+    }
+    return res + err_bAP
+  }
+  //--------------------------------------------------------------------------------  
+  func bAP_Exp_err(){ local expF, i_ap, err_i, err, dist_um localobj ap_soma, ap_dend
+    dist_um = $1
+    ap_soma = $o2 
+    ap_dend = $o3
+    
+    if(idebug) printf("\nbAP_Exp_err: %g um ap_soma_sz %g _dend %g\n", dist_um, ap_soma.size, ap_dend.size )
+    expF = 0.86		// (Last/First)^(1/7)
+
+    err = 0
+    for i_ap=0, ap_soma.size()-1 {
+      err_i = bAP_FAP_penalty
+      if( i_ap<ap_dend.size ) err_i = bAP_F*abs( First_bAPr(dist_um)*expF^i_ap - ap_dend.x[i_ap]/ap_soma.x[i_ap] )
+      if( ilog ) printf( " i_ap %d err %g", i_ap, err_i )
+      err += err_i
+    }
+    return err
+  }
+
+  //--------------------------------------------------------------------------------  
+  func bAP_FML_err(){ local i, dist_um, eF, eM, eL localobj ap_soma, ap_dend
+    dist_um = $1
+    ap_soma = $o2 
+    ap_dend = $o3
+    
+    eF = bAP_FAP_penalty
+    if( ap_soma.size>0 && ap_dend.size>0 )\
+    eF = bAP_F*abs( First_bAPr(dist_um) - ap_dend.x[0]/ap_soma.x[0] )
+    
+    eM = bAP_LAP_penalty
+    i = 2	// int((ap_soma.size + ap_dend.size)/4)
+    if( idebug ) printf( "DfpwPkdVa_bAP: eM i %g\n", i )
+    if( i<ap_soma.size && i<ap_dend.size )\
+    eM = bAP_L*abs( First_bAPr(dist_um)*0.9 - ap_dend.x[i]/ap_soma.x[i] )
+    
+    eL = bAP_LAP_penalty
+    if( ap_soma.size>0 && ap_soma.size==ap_dend.size )\
+    eL = bAP_L*abs( Last_bAPr(dist_um) - ap_dend.x[ap_dend.size-1]/ap_soma.x[ap_soma.size-1] )
+    
+    if( ilog ) printf( " err_bAP_ F %g M %g L %g", eF, eM, eL )
+    
+    if(idebug) {
+      printf("\nDfpwPkdVa_bAP: %g um ap_soma_sz %g _dend %g ", dist_um, ap_soma.size, ap_dend.size )
+      if( ap_soma.size>0 && ap_dend.size>0 && ap_soma.size==ap_dend.size ) \
+      printf("1st %g vs %g/%g Lst %g vs %g/%g\n", First_bAPr(dist_um), ap_dend.x[0], ap_soma.x[0], \
+      Last_bAPr(dist_um), ap_dend.x[ap_dend.size-1], ap_soma.x[ap_dend.size-1] )
+    }
+    return eF+eM+eL
+  }
+  
+  //--------------------------------------------------------------------------------
+  // See if axonal recording has the same numer of spikes as somatic rec
+  // simL.o(0) is trace to compare to tgt; 
+  // simL.o(i) i>0 are traces recorded elsewhere. Use them to evaluate axonal firing
+  // Note that distal axonal spike may occur after somatic one. 
+  // tmax_soma is used to set the somatic window. axonal is set to end of recordings
+  public DfpwPkdVa_aX // ( simL, tgt )
+  func DfpwPkdVa_aX(){ local i, iaxon, res, err_aX, tmax_soma, tmax_axon localobj simL, eTgt
+    simL = $o1
+    eTgt = $o2
+    tmax_soma = $3
+    tmax_axon = -1 if(numarg()>3) tmax_axon = $4
+    
+    err_aX = 0
+    
+    tmax = tmax_axon
+    tr1 = simL.o(0)	// soma recording
+    tr2 = eTgt
+    check_tr12()	// do here to assure tr1 gets resampled to match eTgt
+
+    for iaxon=1, simL.count-1 {
+      tr2 = simL.o(iaxon)	// axonal recording
+      check_tr12()
+      tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+      tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+      err_aX += pkP*abs( tr1.seg_nspikes - tr2.seg_nspikes )/exp(pkPsA*(min( tr1.seg_nspikes, tr2.seg_nspikes )))
+    }
+    if( ilog ) printf( " err_aX %g", err_aX )
+
+    tmax = tmax_soma
+    check_tr12()
+    if( idebug ) printf( "\n\t DfpwPkdVa_aX: imin %d imax %d\n", imin, imax )
+    res = DfpwPkdVa( simL.o(0), eTgt )	// do after so the idebug Graphs come out right
+
+    return res + err_aX
+  }
+  //--------------------------------------------------------------------------------
+  // As above but comparing to experimental instead of simulated
+  // See if axonal recording has the same numer of spikes as somatic rec
+  // simL.o(0) is trace to compare to tgt; 
+  // simL.o(i) i>0 are traces recorded elsewhere. Use them to evaluate axonal firing
+  // Note that distal axonal spike may occur after somatic one. 
+  // tmax_soma is used to set the somatic window. axonal is set to end of recordings or to fourth opt arg
+  public DfpwPkdVa_aXe // ( simL, tgt )
+  func DfpwPkdVa_aXe(){ local i, iaxon, res, err_aX, tmax_soma, tmax_axon localobj simL, eTgt
+    simL = $o1
+    eTgt = $o2
+    tmax_soma = $3
+    tmax_axon = -1 if(numarg()>3) tmax_axon = $4
+
+    err_aX = 0
+    
+    tmax = tmax_axon
+    tr1 = simL.o(0)	// soma recording
+    tr2 = eTgt
+    check_tr12()	// do here to assure tr1 gets resampled to match eTgt
+
+    for iaxon=1, simL.count-1 {
+      tr1 = simL.o(iaxon)	// axonal recording
+      check_tr12()
+      tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+      tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+      err_aX += pkP*abs( tr1.seg_nspikes - tr2.seg_nspikes )/exp(pkPsA*(min( tr1.seg_nspikes, tr2.seg_nspikes )))
+    }
+    if( ilog ) printf( " err_aXe %g", err_aX )
+
+    tmax = tmax_soma
+    check_tr12()
+    if( idebug ) printf( "\n\t DfpwPkdVa_aXe: imin %d imax %d\n", imin, imax )
+    res = DfpwPkdVa( simL.o(0), eTgt )	// do after so the idebug Graphs come out right
+
+    return res + err_aX
+  }
+  //-------------------------------------------------------------------------------- 
+ public do_fpmatch_tr12M, tr1M, tr2M, tr12M_isz1, tr12M_isz2, tr12M_iavg
+  // generate stretched traces tr1M and tr2M with dv and ddv
+  // tr12M_avg(i,i+1) brackets segment i in tr1M & tr2M
+  proc do_fpmatch_tr12M(){ local i, il, b1i, b1f, b1sz, b2i, b2f, b2sz, intvl_avg, t0, i_avg localobj t1_aux, t2_aux 
+    { tr1M = new eTrace() tr1M.vec_t=tr1.vec_t.c tr1M.vec_v=tr1.vec_v.c }
+    { tr2M = new eTrace() tr2M.vec_t=tr2.vec_t.c tr2M.vec_v=tr2.vec_v.c }
+    t1_aux = tr1.vec_t.c
+    t2_aux = tr2.vec_t.c
+    { tr12M_isz1 = new Vector() tr12M_isz2 = new Vector() tr12M_iavg = new Vector() }
+    
+    Dis_err = 0
+    for il=0, match1_list.size-2 {
+      b1i	= match1_list.x[il]
+      b1f	= match1_list.x[il+1]
+      b1sz  	= b1f - b1i
+      b2i	= match2_list.x[il]
+      b2f	= match2_list.x[il+1]
+      b2sz  	= b2f - b2i
+      intvl_avg	= int( 0.5 + (b1sz + b2sz) / 2 )
+      i_avg 	= int( 0.5 + (b1i + b2i ) / 2 )
+      t0 	= tr1.vec_t.x[ i_avg ]
+      
+      Dis_err	+= abs(b1sz - b2sz)^D_p
+      
+      tr12M_isz1.append( b1sz )
+      tr12M_isz2.append( b2sz )
+      tr12M_iavg.append( i_avg )
+      for i=0, b1sz-1 t1_aux.x[b1i+i] = t0 + i*(intvl_avg/b1sz)*dt_sample
+      for i=0, b2sz-1 t2_aux.x[b2i+i] = t0 + i*(intvl_avg/b2sz)*dt_sample
+    }
+    // compute dV & ddV before time stretch (iem interpolate below)
+    tr1M.vec_dv.deriv( tr1M.vec_v, tr1.dt_sample, 2 ) tr1M.vec_ddv.deriv( tr1M.vec_dv, tr1.dt_sample, 2 )
+    tr2M.vec_dv.deriv( tr2M.vec_v, tr2.dt_sample, 2 ) tr2M.vec_ddv.deriv( tr2M.vec_dv, tr2.dt_sample, 2 )
+
+    tr1M.vec_v.interpolate( tr1.vec_t, t1_aux )
+    tr2M.vec_v.interpolate( tr2.vec_t, t2_aux )
+    //    tr12M_iavg.append( tr1.vec_t.size )
+    tr12M_iavg.append( int( 0.5 + (b1f+b2f)/2) )
+    
+    // Interpolative dV and ddV
+    tr1M.vec_dv.interpolate( tr1.vec_t, t1_aux ) tr1M.vec_ddv.interpolate( tr1.vec_t, t1_aux )
+    tr2M.vec_dv.interpolate( tr2.vec_t, t2_aux ) tr2M.vec_ddv.interpolate( tr2.vec_t, t2_aux )
+
+    if( idebug ){
+      tr1M.vec_v.line( Gsegs, tr1M.vec_t, 2, 1 )
+      tr2M.vec_v.line( Gsegs, tr2M.vec_t, 1, 1 )
+      for i=0, t1_aux.size-1 t1_aux.x[i] = abs( tr1M.vec_v.x[i] - tr2M.vec_v.x[i] )
+      t1_aux.line( Gsegs, tr1M.vec_t, 3, 1 )
+    }
+  }
+  
+  //--------------------------------------------------------------------------------
+  public Dfpm
+  func Dfpm(){ local res
+    M( $o1, $o2 )
+    return 1/(tmax-tmin) * Dfpm_err^(1/D_p)
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Dspike from Victor & Purpura, Network 1997
+  objref DVPm
+  public DVPspike, DVPm
+  func DVPspike(){ local res, i, j, nsp1, nsp2 localobj TL1, TL2
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    seg_option=0000	// Don't insert endpoints
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    
+    nsp1 = tr1.seg_list.size
+    nsp2 = tr2.seg_list.size
+    DVPm = new Matrix( nsp1+1, nsp2+1 )
+    TL1 = new Vector( nsp1 )	// spike times vectors 1 and 2
+    TL2 = new Vector( nsp2 )
+    for i=0, nsp1-1 TL1.x[i] = tr1.vec_t.x[tr1.seg_list.x[i]]
+    for i=0, nsp2-1 TL2.x[i] = tr2.vec_t.x[tr2.seg_list.x[i]]
+
+    for i=0, nsp1 DVPm.x[i][0] = i
+    for j=0, nsp2 DVPm.x[0][j] = j
+    if( nsp1>0 && nsp2>0 ){
+      for i=1, nsp1 {
+	for j=1, nsp2 {
+	  DVPm.x[i][j] = min( DVPm.x[i-1][j]+1, DVPm.x[i][j-1]+1,\
+	                      DVPm.x[i-1][j-1]+ DVP_q*abs( TL1.x[i-1] - TL2.x[j-1] ) )
+	}
+      }
+    }
+    res = DVPm.x[nsp1][nsp2]
+    return res
+  }
+  
+  //--------------------------------------------------------------------------------
+  // Dinterval from Victor & Purpura, Network 1997
+  public DVPinterval
+  func DVPinterval(){ local res, i, j, ni1, ni2 localobj TL1, TL2
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    seg_option=1001	// insert endpoints
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    
+    ni1 = tr1.seg_list.size-1
+    ni2 = tr2.seg_list.size-1
+    DVPm = new Matrix( ni1+1, ni2+1 )
+    TL1 = new Vector( ni1 )	// spike interval times vectors 1 and 2
+    TL2 = new Vector( ni2 )
+    for i=0, ni1-1 TL1.x[i] = tr1.vec_t.x[tr1.seg_list.x[i+1]] - tr1.vec_t.x[tr1.seg_list.x[i]]
+    for i=0, ni2-1 TL2.x[i] = tr2.vec_t.x[tr2.seg_list.x[i+1]] - tr2.vec_t.x[tr2.seg_list.x[i]]
+
+    for i=0, ni1 DVPm.x[i][0] = i
+    for j=0, ni2 DVPm.x[0][j] = j
+    if( ni1>0 && ni2>0 ){
+      for i=1, ni1 {
+	for j=1, ni2 {
+	  DVPm.x[i][j] = min( DVPm.x[i-1][j]+1, DVPm.x[i][j-1]+1,\
+	                      DVPm.x[i-1][j-1]+ DVP_q*abs( TL1.x[i-1] - TL2.x[j-1] ) )
+	}
+      }
+    }
+    res = DVPm.x[ni1][ni2]
+    return res
+  }
+  
+  //--------------------------------------------------------------------------------
+  public Dst
+  func Dst(){ local r, rsz, nAP
+    Dst_is_aux( $o1, $o2, &r, &rsz, &nAP )
+    return 1.0/nAP * r^(1/D_p)
+  }
+
+  public Dis
+  func Dis(){ local r, rsz, nAP
+    Dst_is_aux( $o1, $o2, &r, &rsz, &nAP )
+    // return 1.0/nAP * rsz^(1/D_p)
+    return (rsz^(1/D_p)) / nAP
+  }
+
+  proc Dst_is_aux(){ local i, r, sz1, sz2, rsz
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    
+    // seg_option=1001
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+
+    r = rsz = 0
+    for i=0, tr1.seg_list.size-1 {
+      if( i+1 < tr1.seg_list.size && i+1 < tr2.seg_list.size ){
+	sz1 = tr1.vec_t.x[tr1.seg_list.x[i+1]] - tr1.vec_t.x[tr1.seg_list.x[i]] 
+	sz2 = tr2.vec_t.x[tr2.seg_list.x[i+1]] - tr2.vec_t.x[tr2.seg_list.x[i]] 
+	rsz += abs( sz1 - sz2 )^D_p
+      }
+      r += abs( tr1.vec_t.x[tr1.seg_list.x[i]] - tr2.vec_t.x[tr2.seg_list.x[i]] )^D_p
+      if( i >= tr2.seg_list.size-1 ) break 
+    }
+    $&3 = r 
+    $&4 = rsz
+    $&5 = i+1
+  }
+
+  //--------------------------------------------------------------------------------
+  objref mat_Dph, Dph_Graph
+  public mat_Dph, Dph, Dph_Graph
+  func Dph(){ local i, j, jth, res, val
+    mat_Dph = mat_VdV_diff( $o1, $o2 )// Dph_x_m, Dph_x_M, Dph_x_sz, Dph_y_m, Dph_y_M, Dph_y_sz )i
+
+    res = 0
+    for i=0, mat_Dph.nrow-1 {
+      for jth=0, mat_Dph.sprowlen(i)-1 {
+	val = mat_Dph.spgetrowval( i, jth, &j )
+	res += abs( val )^D_p
+	//print i,j,val, $o1.x[i][j], $o2.x[i][j]
+      }
+    }
+    if( idebug ){
+      if( object_id( Dph_Graph )==0 ) {
+	Dph_Graph = new Graph()
+	Dph_Graph.label( "Dph: o:red>0, s:green==0, t:blue<0" )
+      }
+      printf( "Dph: imin %d imax %d x_mMz %g %g %g ymMz %g %g %g\n", \
+      imin, imax, Dph_x_m, Dph_x_M, Dph_x_sz, Dph_y_m, Dph_y_M, Dph_y_sz )
+      for i=0, mat_Dph.nrow-1 {
+	for jth=0, mat_Dph.sprowlen(i)-1 {
+	  val = mat_Dph.spgetrowval( i, jth, &j )
+	  if( idebug > 2 ) printf( "Dph: xy_i %g %g xyv %g %g %g\n", \
+	  i, j, i*Dph_x_sz + Dph_x_m, j*Dph_y_sz + Dph_y_m, val )
+
+	  if( idebug && val>0 ) Dph_Graph.mark( i*Dph_x_sz + Dph_x_m, j*Dph_y_sz + Dph_y_m, "o", 5, 2, 1 )
+	  if( idebug && val==0 ) Dph_Graph.mark( i*Dph_x_sz + Dph_x_m, j*Dph_y_sz + Dph_y_m, "s", 5, 4, 1 )
+	  if( idebug && val<0 ) Dph_Graph.mark( i*Dph_x_sz + Dph_x_m, j*Dph_y_sz + Dph_y_m, "t",5, 3, 1 )
+	}
+      }
+    }
+    //return res^(1/D_p) / tr1.vec_t.size
+    return res^(1/D_p)	
+  }
+  
+  //================================================================================
+  public m1G
+  func m1G(){ local res
+    M( $o1, $o2 )
+    res = (alpha* shape_err + beta *intvl_err) * ( 1 + gamma * abs( tr1.seg_list.size - tr2.seg_list.size ))
+    
+    return res
+  }
+
+  public m1_pkP, pkP
+  func m1_pkP(){ local res
+    M( $o1, $o2 )
+    penalty_err = pkP*abs( tr1.seg_list.size - tr2.seg_list.size )
+    res = (alpha* shape_err + beta *intvl_err) + penalty_err
+    return res
+  }
+
+  public m1s
+  func m1s(){ local res
+    M( $o1, $o2 )
+    res =  alpha* shape_sqerr + beta *intvl_sqerr 
+    return sqrt( res )
+  }
+
+  public m1sW		// wrong. Needs sqrt to satisfy triangle ineq
+  func m1sW(){ local res
+    M( $o1, $o2 )
+    res =  alpha* shape_sqerr + beta *intvl_sqerr 
+    return res
+  }
+
+  public m1s_min
+  func m1s_min(){ local prev_match_dt, vmin, imin, d_dt, idt, val
+    prev_match_dt = match_dt
+    vmin = 1e50
+    imin = 0
+    d_dt = int( 0.5 + (match_dt_max-match_dt_min)/match_dt_n )
+    for( idt=0; idt<match_dt_n; idt+=1 ){
+      match_dt = idt * d_dt
+      val = m1s( $o1, $o2 )
+      // printf( "idt %g match_dt %g val %g imin %g vmin %g\n", idt, match_dt, val, imin, vmin )
+      if( idt==0 || val < vmin ){
+	vmin = val
+	imin = idt
+      }
+    }
+    match_dt = imin * d_dt
+    val = m1s( $o1, $o2 )
+    if( idebug ) printf( "m1s_min: best match_dt %g\n", match_dt )
+    match_dt = prev_match_dt
+    return( val )
+  }
+  
+  //================================================================================
+  public mAP	// Action Potential time difference. ISI in Keren 2005
+  func mAP(){ local r, rs, nAP
+    mAPaux_( $o1, $o2, &r, &rs, &nAP )
+    return r / nAP
+  }
+
+  public mAPs
+  func mAPs(){ local r, rs, nAP
+    mAPaux_( $o1, $o2, &r, &rs, &nAP )
+    return sqrt( rs / nAP )
+  }
+
+  proc mAPaux_(){ local i, r, rs
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last )
+
+    r = rs = 0
+    for i=0, tr1.seg_list.size-1 {
+      r += abs( tr1.vec_t.x[tr1.seg_list.x[i]] - tr2.vec_t.x[tr2.seg_list.x[i]] )
+      rs += ( tr1.vec_t.x[tr1.seg_list.x[i]] - tr2.vec_t.x[tr2.seg_list.x[i]] )^2
+      if( i >= tr2.seg_list.size-1 ) break 
+    }
+    $&3 = r 
+    $&4 = rs 
+    $&5 = i+1
+  }
+
+  //--------------------------------------------------------------------------------
+  objref VdVd_Graph
+  public mat_VdV_diff, VdVd_Graph, sum1, sum2
+  obfunc mat_VdV_diff(){ local i, j, th, x_m, x_M, x_sz, y_m, y_M, y_sz, val, val2  localobj mT, mt1,mt2
+    mt1 = $o1 //matrix
+    mt2 = $o2 //matrix
+    /* 
+    x_m = $3
+    x_M = $4
+    x_sz = $5
+    y_m = $6
+    y_M = $7
+    y_sz = $8
+    */
+
+    sum1=0
+    sum2=0	
+    mT = new Matrix( mt1.nrow, mt1.ncol, 2 )
+    for i=0, mt1.nrow-1 {
+      for jth=0, mt1.sprowlen(i)-1 {
+	val = mt1.spgetrowval( i, jth, &j )
+	mT.x[i][j]=val
+	sum1+=val
+      }
+    }
+
+    for i=0, mt1.nrow-1 {
+      for jth=0, mt1.sprowlen(i)-1 {
+	val = mt1.spgetrowval( i, jth, &j )
+	mT.x[i][j]=val/sum1
+      }
+    }
+ 
+    for i=0, mt2.nrow-1{
+      for jth=0,mt2.sprowlen(i)-1{
+	val2 =mt2.spgetrowval( i, jth, &j )
+	sum2+=val2
+      }
+    }
+ 
+   for i=0, mt2.nrow-1{
+      for jth=0, mt2.sprowlen(i)-1{
+		val2=mt2.spgetrowval(i,jth,&j)
+		//print i, j,"    ", mt1.x[i][j], mt2.x[i][j], mT.x[i][j]*sum1, "    ", val/sum2
+		mT.x[i][j]=mt1.x[i][j]/sum1-val2/sum2
+ 	}
+    }
+    return mT
+  }
+
+
+
+ //--------------------------------------------------------------------------------- 
+  public mat_VdV_sum
+  obfunc mat_VdV_sum() { local i,j,jx,val,imin,imax  localobj mT,tr1
+	tr1=$o1
+	mT=$o2	
+	imin=$3
+	imax=$4
+	
+	tr1.get_mat_VdV(imin, imax, Dph_x_m, Dph_x_M, Dph_x_sz, Dph_y_m, Dph_y_M, Dph_y_sz)
+
+	print "yes"
+	for i=0, tr1.mat_VdV.nrow-1 {
+		for jx=0, tr1.mat_VdV.sprowlen(i)-1{
+			val=tr1.mat_VdV.spgetrowval(i,jx,&j)
+			mT.x[i][j]+=val
+		}
+	}
+	return mT
+
+  }
+
+  //--------------------------------------------------------------------------------
+  objref mat_VdV
+  public mat_VdV, mdV
+  func mdV(){ local i, j, jth, res
+    mat_VdV = mat_VdV_diff( $o1, $o2, VdV_x_m, VdV_x_M, VdV_x_sz, VdV_y_m, VdV_y_M, VdV_y_sz )
+    res = 0
+    for i=0, mat_VdV.nrow-1 {
+      for jth=0, mat_VdV.sprowlen(i)-1 {
+	val = mat_VdV.spgetrowval( i, jth, &j )
+	res += abs( val )
+      }
+    }
+    return res / tr1.vec_t.size
+  }
+
+  public mdVs
+  func mdVs(){ local i, j, jth, res
+    mat_VdV = mat_VdV_diff( $o1, $o2, VdV_x_m, VdV_x_M, VdV_x_sz, VdV_y_m, VdV_y_M, VdV_y_sz )
+    res = 0
+    for i=0, mat_VdV.nrow-1 {
+      for jth=0, mat_VdV.sprowlen(i)-1 {
+	val = mat_VdV.spgetrowval( i, jth, &j )
+	res += val^2
+      }
+    }
+    return sqrt( res ) / tr1.vec_t.size
+  }
+
+  public mdVsW	// wrong. Needs sqrt to satisfy triangle ineq
+  func mdVsW(){ local i, j, jth, res
+    mat_VdV = mat_VdV_diff( $o1, $o2, VdV_x_m, VdV_x_M, VdV_x_sz, VdV_y_m, VdV_y_M, VdV_y_sz )
+    res = 0
+    for i=0, mat_VdV.nrow-1 {
+      for jth=0, mat_VdV.sprowlen(i)-1 {
+	val = mat_VdV.spgetrowval( i, jth, &j )
+	res += val^2
+      }
+    }
+    return res / (tr1.vec_t.size^2)
+  }
+
+  //--------------------------------------------------------------------------------
+  public listM
+  objref d_choice, listM_list, listM_tr
+  public d_choice, listM_list, listM_tr
+  // compute the avg distance between listM_tr and traces in listM_list
+  func listM(){ local i, davg // localobj d_choice, listM_list, listM_tr
+    d_choice = new str_obj( $s1 )
+    //  d_choice = $s1
+    listM_tr = $o2
+    listM_list = $o3
+    davg_i = davg = 0
+    for i=0, listM_list.count-1 {
+      sprint( d_choice.s2, "davg_i = %s( listM_tr, listM_list.object(%d) )", d_choice.s1, i )
+      if( idebug ) printf( "d_choice.s2 %s\n", d_choice.s2 )
+      execute( d_choice.s2, this )
+      if( idebug ) printf( "davg_i = %g\n", davg_i )
+      davg += davg_i
+    }
+    if( idebug ) printf( "listM(%s) = %g\n", d_choice, davg/listM_list.count )
+    return davg/listM_list.count
+  }    
+  //================================================================================
+  objref v_m1, v_m1s, minD_mlist, sort_m1, sort_m1s
+  public minD, v_m1, v_m1s, minD_mlist, sort_m1, sort_m1s
+  proc minD(){ local i localobj trm, trM
+    tr1	= $o1
+    tr2	= $o2
+    check_tr12()
+    
+    v_m1 = new Vector()
+    v_m1s = new Vector()
+
+    tr1.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last ) 
+    tr2.seg_look( seg_option, imin, imax, seg_dt, seg_slp_dt, seg_slp_th, seg_v_th, seg_tiny_last ) 
+    minD_mlist = get_matches( )
+
+    for i=0, minD_mlist.count-1 {
+      eval_m1( minD_mlist.o(i ) )
+      v_m1.append( e_m1 )
+      v_m1s.append( e_m1s )
+    }
+    sort_m1 = v_m1.sortindex()
+    sort_m1s = v_m1s.sortindex()
+    eval_m1( minD_mlist.o( sort_m1s.x[0] ) )
+    
+  }
+  //--------------------------------------------------------------------------------
+  public eval_m1, e_m1, e_m1s
+  proc eval_m1(){ local il, b1sz, b2sz, err, sqerr localobj vM
+    vM = $o1
+    match1_list = new Vector()
+    match2_list = new Vector()
+    for i=0, 1 {
+      match1_list.append( tr1.seg_list.x[i] )	// t0 and tdelay
+      match2_list.append( tr2.seg_list.x[i] )
+    }
+    for i=0, vM.size-1 {
+      match1_list.append( tr1.seg_list.x[ int( vM.x[i]/1000 )+2 ] ) // +2 for t0 and tdelay
+      match2_list.append( tr2.seg_list.x[ vM.x[i]%1000 + 2 ] )
+    }
+    match1_list.append( tr1.seg_list.x[ tr1.seg_list.size-1 ] ) // tend
+    match2_list.append( tr2.seg_list.x[ tr2.seg_list.size-1 ] )
+    
+    if( idebug ){
+      if( object_id( Gmatch )== 0 ) Gmatch = new Graph()
+      Gmatch.erase_all()
+      Gmatch.family( 1 )
+      Gmatch.color( 1 )
+      tr1.vec_v.line( Gmatch, tr1.vec_t )
+      Gmatch.label( tr1.name )
+      Gmatch.color( 2 )
+      tr2.vec_v.line( Gmatch, tr2.vec_t )
+      Gmatch.label( tr2.name )
+
+      for im1=0, match1_list.size-1 {
+	printf( "seg_match: %3d tr1 %10g tr2 %10g\n", \
+	  im1, tr1.vec_t.x[ match1_list.x[im1] ], tr2.vec_t.x[ match2_list.x[im1] ] )
+	Gmatch.mark( tr1.vec_t.x[ match1_list.x[im1] ], 0, "o", 10, im1%8+1, 1 )	// circle
+	Gmatch.mark( tr2.vec_t.x[ match2_list.x[im1] ], 0, "t", 10, im1%8+1, 1 )	// 
+      }
+    }
+    eval_match()
+
+    e_m1 = alpha*shape_err+beta*intvl_err
+    e_m1s = alpha*shape_sqerr+beta*intvl_sqerr
+  }
+  
+  //--------------------------------------------------------------------------------
+  func min(){ local i, im
+    im = $1
+    for i=1, numarg() if( $i<im ) im = $i
+    return im
+  }
+  //--------------------------------------------------------------------------------
+  public get_matches
+  obfunc get_matches(){ local minTh localobj ml, aV
+    aV = new Vector()
+    ml = new Vector()
+    
+    minTh = 0
+    if( match_mTh ) {
+      minTh = tr2.seg_list.size
+      if( tr1.seg_list.size == tr2.seg_list.size ) { minTh = minTh -1
+      }else {
+	if( tr1.seg_list.size < tr2.seg_list.size ) { minTh = tr1.seg_list.size 
+	}else { minTh = tr2.seg_list.size }
+      }
+      minTh = minTh -3
+    }
+    printf( "get_matches seg_list.size tr1 %g tr2 %g minTh %g\n", tr1.seg_list.size, tr2.seg_list.size, minTh )
+    // minTh = min( tr1.seg_list.size, tr2.seg_list.size ) -3
+    ml = all_match( 0, tr1.seg_list.size -3, -1, tr2.seg_list.size -3, -1, aV.c, minTh ) // -3 for t0, tdelay, tend
+    printf( "get_matches got %g DONE\n", ml.count )
+    return ml
+  }
+  //--------------------------------------------------------------------------------
+  public all_match
+  obfunc all_match(){ local i, j, k, n, nM, m, mM, mTh, nRec, nc localobj mlist, nlist, vP, vN
+    nRec=$1
+    n=$2
+    nM=$3
+    m=$4
+    mM=$5
+    vP=$o6
+    mTh = $7
+    mlist = new List()
+    
+    nc = 0
+    if( idebug ) {
+      printf( "  None nRec=%g )", nRec )
+      printV( " vP", vP )
+    }
+
+    if( vP.size >= mTh ) mlist.append( vP.c )
+    if( mlist.count >= match_max ) return mlist
+        
+    for i=nM+1, n-1 {
+      if( nRec+n-i < mTh ) break
+      for j=mM+1, m-1 {
+	if( nRec+m-j < mTh ) break
+	if( idebug ) printN( nRec*4 )
+	if( idebug ) printf( "%d-%d ", i, j )
+	vP.append( i*1000 + j )
+	
+	nlist = all_match( nRec+1, n, i, m, j, vP.c, mTh )
+	for k=0,nlist.count-1 {
+	  mlist.append( nlist.o(k) )
+	  if( mlist.count >= match_max ) return mlist
+	}
+	vP.remove( vP.size-1 )
+      }
+    }
+    return mlist
+  }
+  
+  proc printN(){ local i
+    for i=1, $1 printf( " " )
+  }
+  proc printV(){ local i
+    printf( "%s ", $s1 )
+    for i=0,$o2.size-1 printf( " %g", $o2.x[i] )
+    printf( "\n" )
+  }
+
+
+  //================================================================================
+endtemplate eMatch
+
+//================================================================================
+// calculation related to cv* of vestibular PA (see JM Golderberg, 
+// Transmission between type II hair cells ..., JNeuphysol 95: 428-452, 2006
+begintemplate CVstar
+  objref a, b, tD
+  public a, b, tD
+  
+  proc init(){ // a and b values obtained from Mike Rowe (he got from Goldberg) Jan-2008
+    a = new Vector()
+    // isi-vals  20,    30,    40,50,    60,    70,    80,    90,   100
+    a.append( 1.996, 1.223, 1.104, 1, 0.941, 0.915, 0.847, 0.865, 0.831 )
+    b = new Vector()
+    b.append( 1.170, 0.931, 0.962, 1, 1.063, 1.077, 1.168, 1.268, 1.325 )
+  }
+  
+  public isi_cv
+  obfunc isi_cv(){ local i, cvs localobj tC, gT
+    cvs = $1	// desired cvstar
+    
+    tC = new eTrace()
+    for i=0, a.size-1 {
+      tC.vec_t.append( (i+2)*10 )
+      tC.vec_v.append( exp( (log(cvs) - log(a.x[i])) / b.x[i] ))
+    }
+    return tC
+  }  
+  
+  public plotall
+  obfunc plotall(){ local i localobj eT
+    eT = new eTrace()
+    for i=1, 10 eT.addplot( isi_cv( i* 0.1 ) )
+    return eT
+  }
+
+endtemplate CVstar
+
+/*==================================================
+objref eDist, tr[60]
+
+for i=0, 60-1 tr[i] = new eTrace()
+tr[0].idebug = 1
+
+tr[0].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/20ms-200pA_Pre_avg.txt" )
+//tr[0].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/500ms+800pA_Pre_1.txt" )
+
+tr[0].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/500ms+800pA_Pre_1.txt" )
+tr[1].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/500ms+800pA_Pre_2.txt" )
+tr[2].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/500ms+800pA_Pre_3.txt" )
+tr[3].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/500ms+800pA_Pre_4.txt" )
+tr[4].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/112904a/500ms+800pA_Pre_5.txt" )
+
+tr[5].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/111904a/500ms+800pA_Pre_1.txt" )
+tr[6].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/111904a/500ms+800pA_Pre_2.txt" )
+tr[7].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/111904a/500ms+800pA_Pre_3.txt" )
+tr[8].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/111904a/500ms+800pA_Pre_4.txt" )
+tr[9].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/111904a/500ms+800pA_Pre_5.txt" )
+
+tr[10].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/113004a/500ms+800pA_Pre_1.txt" )
+tr[11].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/113004a/500ms+800pA_Pre_2.txt" )
+tr[12].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/113004a/500ms+800pA_Pre_3.txt" )
+tr[13].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/113004a/500ms+800pA_Pre_4.txt" )
+tr[14].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/113004a/500ms+800pA_Pre_5.txt" )
+
+tr[15].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/120304b/500ms+800pA_Pre_1.txt" )
+tr[16].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/120304b/500ms+800pA_Pre_2.txt" )
+tr[17].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/120304b/500ms+800pA_Pre_3.txt" )
+tr[18].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/120304b/500ms+800pA_Pre_4.txt" )
+tr[19].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk_NMDAblk/120304b/500ms+800pA_Pre_5.txt" )
+
+tr[20].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104a/500ms+800pA_Pre_1.txt" )
+tr[21].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104a/500ms+800pA_Pre_2.txt" )
+tr[22].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104a/500ms+800pA_Pre_3.txt" )
+tr[23].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104a/500ms+800pA_Pre_4.txt" )
+tr[24].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104a/500ms+800pA_Pre_5.txt" )
+
+tr[25].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/112204a/500ms+800pA_Pre_1.txt" )
+tr[26].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/112204a/500ms+800pA_Pre_2.txt" )
+tr[27].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/112204a/500ms+800pA_Pre_3.txt" )
+tr[28].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/112204a/500ms+800pA_Pre_4.txt" )
+tr[29].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/112204a/500ms+800pA_Pre_5.txt" )
+
+tr[30].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104b/500ms+800pA_Pre_1.txt" )
+tr[31].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104b/500ms+800pA_Pre_2.txt" )
+tr[32].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104b/500ms+800pA_Pre_3.txt" )
+tr[33].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104b/500ms+800pA_Pre_4.txt" )
+tr[34].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/GabaAblk_GabaBblk/120104b/500ms+800pA_Pre_5.txt" )
+
+tr[35].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/112304b/500ms+800pA_Pre_1.txt" )
+tr[36].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/112304b/500ms+800pA_Pre_2.txt" )
+tr[37].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/112304b/500ms+800pA_Pre_3.txt" )
+tr[38].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/112304b/500ms+800pA_Pre_4.txt" )
+tr[39].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/112304b/500ms+800pA_Pre_5.txt" )
+
+tr[40].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120304a/500ms+800pA_Pre_1.txt" )
+tr[41].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120304a/500ms+800pA_Pre_2.txt" )
+tr[42].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120304a/500ms+800pA_Pre_3.txt" )
+tr[43].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120304a/500ms+800pA_Pre_4.txt" )
+tr[44].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120304a/500ms+800pA_Pre_5.txt" )
+
+tr[45].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120204a/500ms+800pA_Pre_1.txt" )
+tr[46].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120204a/500ms+800pA_Pre_2.txt" )
+tr[47].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120204a/500ms+800pA_Pre_3.txt" )
+tr[48].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120204a/500ms+800pA_Pre_4.txt" )
+tr[49].load_file( "/Volumes/d2/cNeuro/Data/TraceSets/ACSF/120204a/500ms+800pA_Pre_5.txt" )
+
+ntot = 50
+eDist = new eDistance()
+eDist.sib = 0.9
+printf( "\n\t======= eDist.sib = %g\n", eDist.sib )
+
+double dij[ntot][ntot]
+
+objref sf
+sf = new StringFunctions()
+for iM=0, ntot-1 printf( "%d %s\n", iM, tr[iM].name )
+for iM=0, ntot-1 sf.tail( tr[iM].name, "blk/|ACSF/", tr[iM].name )	//- Drop repetitive part of filename
+
+strdef dist_opt, buf
+dist_opt = "d6"
+
+// add to set baseline 
+//for iM=0, ntot-1 {
+//  voff = tr[iM].vec_v.mean() // 0, 20/tr[iM].dt_sample)
+//  tr[iM].vec_v.add( -voff )
+//}
+
+for iM=0, ntot-1 {
+  for jM=iM+1, ntot-1 {
+    printf( "\n======== Distance %d %d %s %s ========\n", iM, jM, tr[iM].name, tr[jM].name )
+    sprint( buf, "dij[iM][jM] = eDist.%s( tr[iM], tr[jM] )", dist_opt )
+    execute( buf )
+    dij[jM][iM] = dij[iM][jM]
+  }
+}
+
+objref fd
+fd = new File()
+sprint( buf, ",%s-n%d-SIB-%.2f.txt", dist_opt, ntot, eDist.sib )
+fd.wopen( buf )
+for iM=0, ntot-1 {
+  fd.printf( "%s", tr[iM].name )
+  for jM=0, iM-1 {
+    fd.printf( "\t%g", dij[iM][jM] )
+  }
+  fd.printf( "\n" )
+}
+fd.close()
+
+================================================================================ */

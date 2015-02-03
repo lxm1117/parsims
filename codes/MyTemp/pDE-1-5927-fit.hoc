@@ -1,0 +1,32 @@
+objref pDE_outF 
+pDE_outF = new File() 
+pDE_outF.wopen( "/home/ximi/Projects/ParSims/codes/MyTemp/pDE-1-5927-res.txt" ) 
+
+// ---------- begin write_eval_hoc ----------
+objref pDE_eval 
+pDE_fc_list = new List() // must be defined (using objref) previously
+
+proc pDE_do_all(){ local i
+  pDE_eval = new Vector() 
+  for i=0, pDE_fc_list.count-1 pDE_eval.append( pDE_do_fit_case( i ))
+
+  printf( "Error Sum %g\nDetail: ", pDE_eval.sum() )
+  for i=0,pDE_eval.size-1 printf( " %10g", pDE_eval.x[i] )
+  printf( "\n" )
+}
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-2ms+375pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "4*dfc_PassWgt*100/tstop", "soma", "dfc_set_stims_etc(375/1000,2,5)", "dfc_sim_BBF()", "2:htf_files/2ms+375pA.htf", "blMax=4", "dfc_set_tgt(375/1000,2,21,136,16)" ))
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-20ms+50pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "2*dfc_PassWgt*100/tstop", "soma", "dfc_set_stims_etc(50/1000,20,5)", "dfc_sim_BBF()", "2:htf_files/20ms+50pA.htf", "blMax=4", "dfc_set_tgt(50/1000,20,21,120,16)" ))
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-20ms-50pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "2*dfc_PassWgt*100/tstop", "soma", "dfc_options_all();dfc_set_stims_etc(-50/1000,20,5)", "dfc_sim_BBF()", "2:htf_files/20ms-50pA.htf", "blMax=4", "dfc_set_tgt(-50/1000,20,21,120,16)" ))
+
+pDE_fc_list.append( new pDE_fit_case( "072006b-20ms-200pA", "eMatch", "dfc_eD.m0(dfc_simL_i.o(0),dfc_tgt_i)", "8.3*dfc_PassWgt*100/tstop", "soma", "dfc_options_all();dfc_set_stims_etc(-200/1000,20,5)", "dfc_sim_BBF()", "2:htf_files/20ms-200pA.htf", "blMax=4", "dfc_set_tgt(-200/1000,20,21,120,16)" ))
+
+pDE_do_all()
+// ---------- end write_eval_hoc ----------
+
+
+pDE_outF.printf( "%.10g\n", pDE_eval.sum() ) 
+pDE_eval.printf( pDE_outF )
+pDE_outF.close()
